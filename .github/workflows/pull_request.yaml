@@ -1,0 +1,42 @@
+# Enforces docs/method.md on every pull request and on main.
+name: Verify
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: make verify (lint, links, method, tests)
+        run: make verify
+
+      - name: Accepted ADRs are immutable
+        if: github.event_name == 'pull_request'
+        run: python3 hack/check_method.py adr-diff --base "origin/${{ github.base_ref }}"
+
+      - name: The PR cites its story
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          python3 hack/check_method.py pr-body --body-file "$RUNNER_TEMP/pr-body.md"

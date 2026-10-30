@@ -9,7 +9,7 @@ Phases → milestones → user stories. **Every story delivers a demo-able outco
   satisfies (`acceptance.md`, e.g. **AC-ISO-1**).
 - **Lifecycle:** **📝 Draft** (written, not agreed — may be re-scoped or killed)
   → **👍 Approved** (a human said build it) → **🔨 In progress** → **✅ Done**
-  (Done line met, `make` green, planning doc linked). Nothing moves from Draft
+  (Done line met, `make verify` green, planning doc linked). Nothing moves from Draft
   to In progress without explicit approval.
 - **One story at a time**, end to end. Walking skeleton first: one tenant, one
   workload, one secret delivered, isolated and proven, then thicken.
@@ -153,6 +153,30 @@ repos.
 **Story C.16 — Moving a tenant to Enterprise** 📝 *Draft* — runbook, after
 C.0 question 8, for moving `<tenant>/kv` into Vault namespace `<tenant>`
 without changing a workload.
+
+---
+
+## Developer experience — enforcing the method
+
+The method (`method.md`) is enforced by `make verify` and the PR workflow. These
+stories close the gaps it lists under "Known enforcement gaps".
+
+**Story DX.1 — CI is a merge gate** 📝 *Draft*
+
+As a reviewer, I want a red `verify` check to block the merge, so that the
+method can't be skipped by merging past a failing check.
+
+Done: `verify` listed in `required_status_checks_jobs` for this repo in
+`stakater/stakater-github-config`; a PR with a failing check can't be merged.
+
+**Story DX.2 — The method on every edit** 📝 *Draft*
+
+As an engineer or agent, I want `make verify` to run after every edit, so that
+a broken rule shows up while I work rather than at the PR, as in kube-ward.
+
+Done: a Claude Code PostToolUse hook in `.claude/settings.json` runs the fast
+checks (`make method links`) after each edit to a Markdown file; the hook is
+documented in `CLAUDE.md`.
 
 ---
 

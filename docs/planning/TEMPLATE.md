@@ -37,6 +37,6 @@ including negative cases.}
 
 ## Done means
 
-{The roadmap Done line, plus: `make` green, golden regenerated if intended,
+{The roadmap Done line, plus: `make verify` green, golden regenerated if intended,
 Chart.yaml version bumped, docs updated (which), acceptance ids passing at
 which level.}
