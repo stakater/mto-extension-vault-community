@@ -26,7 +26,7 @@ port doesn't carry an Enterprise assumption into Community.
 ## Design
 
 Environment: the Enterprise repo's lab, which already runs Community Edition —
-`make lab-up VAULT_EDITION=ce` in `stakater-ab/mto-extension-vault-enterprise`
+`make lab-up VAULT_EDITION=ce` in `stakater/mto-extension-vault-enterprise`
 (kind 1.33, cert-manager, Template Operator v2 0.0.7, ESO, Reloader, VCO
 v1.0.3, Keycloak and Dex). Instead of the Enterprise charts, apply by hand the
 objects design §3 describes for two tenants `team-a`, `team-b` and a prefix

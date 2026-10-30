@@ -26,8 +26,8 @@ the Vault Enterprise and OpenBao extensions.
 
 | Backend | A tenant is | Extension |
 |---|---|---|
-| Vault Enterprise | a Vault namespace | [mto-extension-vault-enterprise](https://github.com/stakater-ab/mto-extension-vault-enterprise) |
-| OpenBao | an OpenBao namespace | [mto-extension-openbao](https://github.com/stakater-ab/mto-extension-openbao) |
+| Vault Enterprise | a Vault namespace | [mto-extension-vault-enterprise](https://github.com/stakater/mto-extension-vault-enterprise) |
+| OpenBao | an OpenBao namespace | [mto-extension-openbao](https://github.com/stakater/mto-extension-openbao) |
 | Vault Community | a mount + policies + login roles | this repo |
 
 ## How it is built

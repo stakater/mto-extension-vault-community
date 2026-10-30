@@ -12,7 +12,7 @@ When Vault or VCO changes, update this file first.
 
 Short source paths are relative to `https://developer.hashicorp.com/vault/`.
 Rows marked *(Enterprise lab)* were observed in
-`stakater-ab/mto-extension-vault-enterprise`, whose lab runs Community Edition
+`stakater/mto-extension-vault-enterprise`, whose lab runs Community Edition
 with `VAULT_EDITION=ce`.
 
 ---
