@@ -52,7 +52,3 @@ and, for the part Community Edition makes critical,
 | [Diagrams](docs/diagrams.md) | C4 and sequence diagrams |
 | [ADRs](docs/adr/README.md) | decisions and rejected alternatives |
 | [Method](docs/method.md) | how work moves from story to done |
-
-The customer-facing deck for this extension lives in `stakater-sales/mto-sales`
-(`src/pages/vault-community.astro`). This repository is the source of truth;
-the deck follows it.
