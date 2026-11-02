@@ -1,0 +1,6 @@
+# A code owner's review is required to merge (branch protection). That review is
+# the method's approval gate: only a human moves a story to Approved or accepts
+# an ADR (docs/method.md).
+*                 @stakater/team-alpha
+/docs/roadmap.md  @stakater/team-alpha
+/docs/adr/        @stakater/team-alpha
