@@ -169,7 +169,7 @@ exporter writes, the importer reads through ESO, the reverse direction and a
 third tenant are refused. Satisfies **AC-SHR-3**. Planning:
 [`planning/C8-sharing-across-tenants.md`](planning/C8-sharing-across-tenants.md).
 
-**Story C.9 — Lifecycle that keeps data** 👍 *Approved*
+**Story C.9 — Lifecycle that keeps data** ✅ *Done*
 
 As a platform team, I want offboarding to revoke access at once and keep the
 data, so that a mistaken delete never loses secrets.
@@ -179,6 +179,7 @@ gone, data kept); annotation removed (policy and role gone); tenant deleted
 (its auth mounts disabled, tokens revoked, `<tenant>/kv` kept); tenant
 recreated (it adopts the retained data, visible); the admin purge order
 documented in `charts/README.md`. Satisfies **AC-LIFE-2..5**, **AC-ACC-5**.
+Planning: [`planning/C9-lifecycle-keeps-data.md`](planning/C9-lifecycle-keeps-data.md).
 
 **Story C.10 — Rotation reaches the pod** 👍 *Approved*
 

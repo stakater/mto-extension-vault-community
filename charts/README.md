@@ -317,3 +317,46 @@ values". There is no fallback role: `sso.tenantRoleMapping.fallback` must stay
 `deny`, because a role without a group binding would give any valid token of
 the IdP that tenant's access. A person removed from a group can't log in
 again; a token already issued lives to its TTL (`ssoToken.ttl`, default 15m).
+
+## Deletion
+
+Access ends at once; data stays until a Vault admin purges it.
+
+| Event | What goes | What stays |
+|---|---|---|
+| Annotation removed | the policy, role and ConfigMap; a token issued before loses access at once (Vault reads a token's policies by name) | the app's secrets |
+| Role lowered | the policy is rewritten in place; an issued token follows at once | secrets |
+| Tenant's last labelled namespace deleted | its child TemplateInstances: every grant, **its auth mounts — which revokes every token issued through them**, share tokens included | `<tenant>/kv` and its secrets |
+| Tenant deleted | as above; the `<tenant>-kv` CR stays `Terminating`, because VCO's production policy may not disable a kv mount | the mount, its secrets, and the shares in `shared/kv` |
+| Tenant recreated with the same name | — | the retained secrets come back: **purge before reusing a name** |
+
+A refused delete is retried: until the admin purges it, a `Terminating` mount
+CR adds a 403 to VCO's log and to Vault's audit log on every retry.
+
+The purge, by a Vault admin, in this order:
+
+1. Check that the mount CR is already `Terminating` (the tenant is deleted).
+   **Never disable a mount whose CR is live**: VCO re-creates it, empty,
+   within one sync period.
+1. `vault secrets disable <tenant>/kv`.
+1. Remove the CR's finalizer:
+   `kubectl -n vault-config patch secretenginemounts.redhatcop.redhat.io <tenant>-kv --type merge -p '{"metadata":{"finalizers":null}}'`.
+1. Before the name is reused: delete `from-<tenant>/` and `to-<tenant>/` in
+   `shared/kv/`, and remove the peers' `kv-export-tenant` and
+   `kv-import-tenant` entries that name it.
+
+## Uninstall
+
+In this order, so the RBAC and VCO's login ServiceAccount outlive every CR
+they tear down:
+
+```bash
+kubectl -n vault-config delete templateinstances.templates.v2.stakater.com mto-extension-vault-community-parent --wait
+# wait until no VCO CR is left in vault-config (the kv mount CRs stay Terminating
+# under the production policy: purge them first, as above)
+helm uninstall mto-extension-vault-community-bootstrap -n vault-config
+```
+
+A bare `helm uninstall` deletes the RBAC and the VCO login ServiceAccount
+first, and every CR then waits `Terminating` for a login that no longer
+exists. `make lab-uninstall` runs this order.

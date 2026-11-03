@@ -23,6 +23,8 @@ import (
 //	                            SA viewer  kv viewer
 //	                            SA admin   kv admin
 //	                            SA auditor kv audit-read
+//	                            SA temp    kv editor, its access is removed mid-run
+//	                            SA lower   kv editor, lowered to viewer mid-run
 //	           e2e-alpha-tools  SA web     no annotation: web's name in another namespace
 //	                            SA sub     kv editor, subscribes to e2e-alpha-dev
 //	                            SA nosub   kv editor, no subscription
@@ -167,7 +169,7 @@ func TestE2E(t *testing.T) {
 			annPrefix + "role":             "editor",
 			annPrefix + "kv-export-tenant": beta,
 		})
-		for sa, role := range map[string]string{"viewer": "viewer", "admin": "admin", "auditor": "audit-read"} {
+		for sa, role := range map[string]string{"viewer": "viewer", "admin": "admin", "auditor": "audit-read", "temp": "editor", "lower": "editor"} {
 			createServiceAccount(t, alphaNS, sa, map[string]string{annPrefix + "kv": "true", annPrefix + "role": role})
 		}
 		// Named like web, in another namespace, with no annotation: a role binds
@@ -215,6 +217,7 @@ func TestE2E(t *testing.T) {
 		}
 		for _, r := range []string{roleName(alpha, alphaNS, "web"), roleName(alpha, alphaNS, "viewer"),
 			roleName(alpha, alphaNS, "admin"), roleName(alpha, alphaNS, "auditor"), roleName(alpha, reuseNS, "app"),
+			roleName(alpha, alphaNS, "temp"), roleName(alpha, alphaNS, "lower"),
 			roleName(alpha, toolsNS, "sub"), roleName(alpha, toolsNS, "nosub"),
 			roleName(beta, betaNS, "reader"), roleName(prefixT, coreNS, "core")} {
 			waitVCO(t, "policies", r)
@@ -1112,6 +1115,280 @@ spec:
 		holdFor(t, vcoSync+10*time.Second, "e2e-alpha's role stays closed to the reused namespace", func() string {
 			if _, _, err := vaultTryLogin(t, alpha, appRole, jwt); err == nil {
 				return "the login succeeded"
+			}
+			return ""
+		})
+	})
+
+	step("role change: lowering editor to viewer takes write away", func(t *testing.T) {
+		// AC-ACC-5.
+		role := roleName(alpha, alphaNS, "lower")
+		leaf := appPath(alphaNS, "lower", "k")
+		// The write before the change is the matching allow for the refusals
+		// after it: same token, same path.
+		lowerToken, _ := vaultLogin(t, alpha, role, saToken(t, alphaNS, "lower"))
+		if err := kvPut(t, lowerToken, alpha, leaf, "v=1"); err != nil {
+			t.Fatalf("editor could not write its own secret before the role change: %v", err)
+		}
+		setServiceAccountAnnotations(t, alphaNS, "lower", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "viewer"})
+		// The role is not part of the policy name, so VCO rewrites the same
+		// policy in place. Inspected as root: wait for the viewer version.
+		waitFor(t, "Vault holds the viewer policy for lower", func() string {
+			out, err := vaultRun(t, vaultRootToken, "policy", "read", role)
+			if err != nil {
+				return err.Error()
+			}
+			if strings.Contains(out, `"create"`) {
+				return "the policy still grants create"
+			}
+			return ""
+		})
+		// Vault resolves a token's policies by name on every request, so the
+		// token issued at editor follows the new role at once.
+		if err := kvPut(t, lowerToken, alpha, leaf, "v=2"); !refused(err) {
+			t.Errorf("a token issued at editor still wrote after the role was lowered; err: %v", err)
+		}
+		if got, err := kvGet(t, lowerToken, alpha, leaf, "v"); err != nil || got != "1" {
+			t.Errorf("viewer could not read its own secret after the role change: got %q, err %v", got, err)
+		}
+		newToken, _ := vaultLogin(t, alpha, role, saToken(t, alphaNS, "lower"))
+		if err := kvPut(t, newToken, alpha, leaf, "v=3"); !refused(err) {
+			t.Errorf("a new login after the role change wrote a secret; err: %v", err)
+		}
+	})
+
+	step("removal: dropping the annotation revokes the access", func(t *testing.T) {
+		// AC-LIFE-3.
+		role := roleName(alpha, alphaNS, "temp")
+		// A token issued BEFORE the removal, and a write with it: the matching
+		// allow for the refusal after it.
+		tempToken, _ := vaultLogin(t, alpha, role, saToken(t, alphaNS, "temp"))
+		leaf := appPath(alphaNS, "temp", "k")
+		if err := kvPut(t, tempToken, alpha, leaf, "v=1"); err != nil {
+			t.Fatalf("temp could not write its own secret before removal: %v", err)
+		}
+		setServiceAccountAnnotations(t, alphaNS, "temp", nil)
+		for _, k := range []string{"policies", "kubernetesauthengineroles"} {
+			waitFor(t, k+"/"+role+" gone", func() string {
+				if get(t, vcoGVR(k), configNS, role) != nil {
+					return "still present"
+				}
+				return ""
+			})
+		}
+		waitFor(t, "the Vault role and policy are deleted", func() string {
+			if msg := vaultGone(t, "read", "auth/"+k8sAuthMount(alpha)+"/role/"+role); msg != "" {
+				return "role: " + msg
+			}
+			if msg := vaultGone(t, "policy", "read", role); msg != "" {
+				return "policy: " + msg
+			}
+			return ""
+		})
+		// Vault resolves a token's policies by name on every request, so the
+		// token issued before the removal loses its access with the policy.
+		if _, err := kvGet(t, tempToken, alpha, leaf, "v"); !refused(err) {
+			t.Errorf("a token issued before the removal still read temp's secret; err: %v", err)
+		}
+		// A new login fails because the role is gone, not for another reason.
+		if _, _, err := vaultTryLogin(t, alpha, role, saToken(t, alphaNS, "temp")); err == nil || !strings.Contains(err.Error(), "invalid role name") {
+			t.Errorf("login after removal: want Vault's \"invalid role name\", got %v", err)
+		}
+		if configMapData(t, alphaNS, "vault-config-temp") != nil {
+			t.Errorf("ConfigMap vault-config-temp survived the removal")
+		}
+	})
+
+	step("lifetime: a tenant keeps its data without a labelled namespace, and its tokens are revoked", func(t *testing.T) {
+		// AC-LIFE-2, AC-LIFE-5. The workload render exists only while a tenant
+		// has a labelled namespace; its kv mount is the parent's, so it must
+		// outlive it. Deleting e2e-beta's last namespaces must remove its child
+		// TemplateInstances and nothing that holds data — and, on Community
+		// Edition, disable its auth mount, which revokes every token issued
+		// through it (A6, ADR-0007).
+		readerRole := roleName(beta, betaNS, "reader")
+		// A token issued before, and a read with it: the allow for the
+		// revocation below.
+		readerToken, _ := vaultLogin(t, beta, readerRole, saToken(t, betaNS, "reader"))
+		if got, err := kvGet(t, readerToken, beta, appPath(betaNS, "reader", "cfg"), "mode"); err != nil || got != "beta" {
+			t.Fatalf("reader could not read its secret before its namespaces went: got %q, err %v", got, err)
+		}
+		// What the workload render wrote: the grants, not the data.
+		grants := []struct{ kind, name string }{
+			{"authenginemounts", beta + "-kubernetes"},
+			{"kubernetesauthengineconfigs", beta + "-kubernetes-config"},
+			{"policies", readerRole},
+			{"kubernetesauthengineroles", readerRole},
+		}
+		// e2e-beta's labelled namespaces: its own, and the one it took over in
+		// the reused-name step.
+		deleteTenantNamespace(t, betaNS)
+		deleteTenantNamespace(t, reuseNS)
+		for _, ti := range []string{tiPrefix + beta, tiPrefix + beta + ".eso"} {
+			waitFor(t, "TemplateInstance "+ti+" gone", func() string {
+				if get(t, gvrTemplateInstance, configNS, ti) != nil {
+					return "still present"
+				}
+				return ""
+			})
+		}
+		for _, o := range grants {
+			waitFor(t, o.kind+"/"+o.name+" gone with the workload render", func() string {
+				if get(t, vcoGVR(o.kind), configNS, o.name) != nil {
+					return "still present"
+				}
+				return ""
+			})
+		}
+		waitFor(t, "e2e-beta's auth mount disabled", func() string {
+			if slices.Contains(vaultKeys(t, "auth", "list", "-format=json"), k8sAuthMount(beta)+"/") {
+				return "still mounted"
+			}
+			return ""
+		})
+		// The token issued before is revoked with its mount, at once — not at
+		// its TTL, as a role deletion on a shared mount would leave it.
+		if _, err := kvGet(t, readerToken, beta, appPath(betaNS, "reader", "cfg"), "mode"); !refused(err) {
+			t.Errorf("a token issued through e2e-beta's auth mount still read after the mount was disabled; err: %v", err)
+		}
+		// Held across a VCO drift period, not read once: a deletion is
+		// asynchronous (t-op-v2 prunes, then VCO deletes in Vault).
+		holdFor(t, vcoSync+15*time.Second, "e2e-beta's Vault data without a labelled namespace", func() string {
+			if obj := get(t, vcoGVR("secretenginemounts"), configNS, beta+"-kv"); obj == nil || obj.GetDeletionTimestamp() != nil {
+				return "secretenginemounts/" + beta + "-kv was removed with the tenant's last namespace"
+			}
+			if got, err := kvGet(t, vaultRootToken, beta, appPath(betaNS, "reader", "cfg"), "mode"); err != nil || got != "beta" {
+				return fmt.Sprintf("the secret did not survive: got %q, err %v", got, err)
+			}
+			return ""
+		})
+		// A labelled namespace brings the workload render back, and the grants
+		// find the data that stayed — what a reused tenant name adopts.
+		createTenant(t, beta, betaNS)
+		waitTIReady(t, tiPrefix+beta)
+		waitTIReady(t, tiPrefix+beta+".eso")
+		createServiceAccount(t, betaNS, "reader", map[string]string{
+			annPrefix + "kv":               "true",
+			annPrefix + "role":             "viewer",
+			annPrefix + "kv-import-tenant": alpha,
+		})
+		for _, o := range grants {
+			waitVCO(t, o.kind, o.name)
+		}
+		var newToken string
+		waitFor(t, "reader logs in again at e2e-beta's mount", func() string {
+			tok, _, err := vaultTryLogin(t, beta, readerRole, saToken(t, betaNS, "reader"))
+			if err != nil {
+				return err.Error()
+			}
+			newToken = tok
+			return ""
+		})
+		if got, err := kvGet(t, newToken, beta, appPath(betaNS, "reader", "cfg"), "mode"); err != nil || got != "beta" {
+			t.Fatalf("the workload could not read its surviving secret after its namespace came back: got %q, err %v", got, err)
+		}
+	})
+
+	step("offboarding: deleting a Tenant keeps its Vault data under the production VCO policy", func(t *testing.T) {
+		// AC-LIFE-4. The lab's VCO login policy allows the kv delete, so the
+		// teardown can clean up. The production one refuses it: that refusal is
+		// what keeps a tenant's secrets when its Tenant CR goes. Root swaps it in
+		// for this step only.
+		prod, err := os.ReadFile("../../charts/examples/vco-admin-policy.hcl")
+		if err != nil {
+			t.Fatalf("read the production VCO policy: %v", err)
+		}
+		lab := policyRules(t, vcoLogin)
+		t.Cleanup(func() { vaultRoot(t, "write", "sys/policy/"+vcoLogin, "policy="+lab) })
+		vaultRoot(t, "write", "sys/policy/"+vcoLogin, "policy="+string(prod))
+
+		// The data that must stay: e2e-beta's own secret, and both shares with
+		// e2e-alpha, which live in shared/kv. Inspected as root: e2e-beta's
+		// workloads lose their logins with the Tenant.
+		handoff := env + "/from-" + alpha + "/to-" + beta + "/handoff"
+		reverse := env + "/from-" + beta + "/to-" + alpha + "/x"
+		data := func() string {
+			if got, err := kvGet(t, vaultRootToken, beta, appPath(betaNS, "reader", "cfg"), "mode"); err != nil || got != "beta" {
+				return fmt.Sprintf("e2e-beta's secret: got %q, err %v", got, err)
+			}
+			if got, err := kvGet(t, vaultRootToken, sharedName, handoff, "token"); err != nil || got != "t1" {
+				return fmt.Sprintf("the share to e2e-beta: got %q, err %v", got, err)
+			}
+			if got, err := kvGet(t, vaultRootToken, sharedName, reverse, "token"); err != nil || got != "r1" {
+				return fmt.Sprintf("the share from e2e-beta: got %q, err %v", got, err)
+			}
+			return ""
+		}
+		if msg := data(); msg != "" {
+			t.Fatalf("before the deletion: %s", msg)
+		}
+
+		// MTO deletes a Tenant together with its namespaces.
+		deleteTenant(t, beta, betaNS)
+
+		// The grants go, under the production policy too: every e2e-beta CR
+		// except the kv mount, and e2e-alpha's share role to the tenant that is
+		// gone.
+		waitFor(t, "every e2e-beta CR gone except its kv mount", func() string {
+			objs := tenantVCOObjects(t, beta)
+			if len(objs) != 1 || objs[0] != "secretenginemounts/"+beta+"-kv" {
+				return fmt.Sprintf("left: %v", objs)
+			}
+			return ""
+		})
+		outRole := "share." + alpha + "." + alphaNS + ".web.out." + beta
+		for _, k := range []string{"policies", "kubernetesauthengineroles"} {
+			waitFor(t, k+"/"+outRole+" gone with its peer", func() string {
+				if get(t, vcoGVR(k), configNS, outRole) != nil {
+					return "still present"
+				}
+				return ""
+			})
+		}
+		if msg := vaultGone(t, "policy", "read", outRole); msg != "" {
+			t.Errorf("e2e-alpha's share policy to e2e-beta is still in Vault: %s", msg)
+		}
+
+		// VCO tries to delete the mount, Vault refuses, and VCO's finalizer
+		// holds the CR. Held across a drift period.
+		holdFor(t, vcoSync+15*time.Second, "e2e-beta's data after its Tenant was deleted", func() string {
+			switch obj := get(t, vcoGVR("secretenginemounts"), configNS, beta+"-kv"); {
+			case obj == nil:
+				return "secretenginemounts/" + beta + "-kv was deleted"
+			case obj.GetDeletionTimestamp() == nil:
+				return "secretenginemounts/" + beta + "-kv is not being deleted: the Tenant's deletion did not reach it"
+			}
+			return data()
+		})
+
+		// The refusal is the policy's: VCO's own login reads the mount, and is
+		// refused its disable. Under the lab policy the disable would pass.
+		vcoToken, _, err := vaultTryLoginAt(t, vcoLoginMount, vcoLogin, saToken(t, configNS, vcoLogin))
+		if err != nil {
+			t.Fatalf("log in as VCO: %v", err)
+		}
+		if _, err := vaultRun(t, vcoToken, "read", "sys/mounts/"+kvMount(beta)); err != nil {
+			t.Fatalf("VCO could not read e2e-beta's kv mount: %v", err)
+		}
+		if _, err := vaultRun(t, vcoToken, "secrets", "disable", kvMount(beta)); !refused(err) {
+			t.Errorf("VCO's login disabled e2e-beta's kv mount; err: %v", err)
+		}
+
+		// The documented purge (charts/README.md → Deletion): with the mount CR
+		// already Terminating, a Vault admin disables the mount, then removes the
+		// finalizer. Never the other way round: a live CR makes VCO re-create
+		// the mount, empty (V12).
+		vaultRoot(t, "secrets", "disable", kvMount(beta))
+		removeFinalizers(t, vcoGVR("secretenginemounts"), configNS, beta+"-kv")
+		waitFor(t, "secretenginemounts/"+beta+"-kv gone", func() string {
+			if get(t, vcoGVR("secretenginemounts"), configNS, beta+"-kv") != nil {
+				return "still present"
+			}
+			return ""
+		})
+		holdFor(t, vcoSync+10*time.Second, "the purged mount stays gone", func() string {
+			if slices.Contains(vaultKeys(t, "secrets", "list", "-format=json"), kvMount(beta)+"/") {
+				return kvMount(beta) + " is mounted again"
 			}
 			return ""
 		})
