@@ -1,0 +1,61 @@
+# C.0 question 13: a namespace name reused by another tenant. The MTO
+# namespace webhook checks the tenant label, not the name, so after tenant
+# team-a deletes team-a-gone a member of team-b can create a namespace of that
+# name. Two roles for the same ServiceAccount, through VCO with the narrowed
+# policy:
+#   kv.team-a.team-a-gone.app      literal namespace (the Enterprise chart's binding)
+#   kv.team-a.team-a-gone.app-sel  selector: the namespace's name AND tenant label
+# q13-ns-reuse.sh runs the scenario.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-gone
+  labels: { stakater.com/tenant: team-a }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: app, namespace: team-a-gone }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata: { name: kv.team-a.team-a-gone.app, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-gone.app
+  policy: |
+    path "team-a/kv/data/dev/team-a-gone/app/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/team-a-gone/app/*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-gone.app, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-gone.app
+  path: mto/workloads
+  targetServiceAccounts: [app]
+  targetNamespaces:
+    targetNamespaces: [team-a-gone]
+  policies: [kv.team-a.team-a-gone.app]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-gone.app-sel, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-gone.app-sel
+  path: mto/workloads
+  targetServiceAccounts: [app]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: team-a-gone
+        stakater.com/tenant: team-a
+  policies: [kv.team-a.team-a-gone.app]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400

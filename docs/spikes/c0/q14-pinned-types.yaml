@@ -1,0 +1,36 @@
+# C.0 question 14: VCO's policy with the mount type pinned by
+# allowed_parameters (vco-admin-policy.hcl). Each pinned path gets a CR of the
+# right type, which must reconcile, and one of a wrong type, which must get a
+# 403. The tune of an existing mount (no type in the body) must still work:
+# q14 changes defaultLeaseTTL on tidemo/kv and on auth/mto/workloads.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata: { name: pin-ok-kv, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: pinok
+  name: kv
+  type: kv
+  config: { listingVisibility: hidden }
+  options: { version: "2" }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata: { name: pin-bad-kv, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: pinbad
+  name: kv
+  type: transit
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: pin-bad-sso, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: mto
+  name: sso
+  type: userpass
+  config: { listingVisibility: hidden }

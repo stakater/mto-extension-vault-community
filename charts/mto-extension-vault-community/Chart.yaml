@@ -1,0 +1,19 @@
+apiVersion: v2
+name: mto-extension-vault-community
+description: |
+  Vault Community Edition config for one MTO Tenant: its kubernetes auth mount
+  auth/<tenant>/kubernetes/workloads, optional OIDC SSO at
+  auth/<tenant>/oidc/sso, per-ServiceAccount Policy + Role over the tenant's
+  KV mount <tenant>/kv, intra-tenant and cross-tenant KV sharing,
+  per-Deployment ExternalSecrets.
+
+  Rendered once per Tenant CR by the mto-extension-vault-community-bootstrap
+  parent Template. Pulled by template-operator-v2 — not installed standalone.
+  The tenant's kv mount comes from the parent, so it outlives the tenant's
+  labelled namespaces.
+
+  Requires: vault-config-operator (VCO) v1.0.3 or later, and Vault Community
+  Edition 2.x, which has no namespaces: every path starts with the tenant.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

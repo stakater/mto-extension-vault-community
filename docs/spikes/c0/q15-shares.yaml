@@ -1,0 +1,84 @@
+# C.0 question 15 / AC-SHR-3: cross-tenant shares in shared/kv. The share
+# policies and roles of the Enterprise chart (04-sa-share-out.yaml,
+# 04-sa-share-in.yaml) with full paths from root, through VCO with the narrowed
+# policy, each role bound by namespace name AND tenant label (question 13).
+# team (team-core) exports to team-b: its from-team/ prefix must not reach
+# team-a's from-team-a/. The checks are in acceptance.sh.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata: { name: share.team-a.team-a-api.web.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-a.team-a-api.web.out.team-b
+  policy: |
+    path "shared/kv/data/dev/from-team-a/to-team-b/*"     { capabilities = ["create", "read", "update", "list"] }
+    path "shared/kv/metadata/dev/from-team-a/to-team-b/*" { capabilities = ["create", "read", "update", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team-a.team-a-api.web.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-a.team-a-api.web.out.team-b
+  path: mto/workloads
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-api, stakater.com/tenant: team-a }
+  policies: [share.team-a.team-a-api.web.out.team-b]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata: { name: share.team-b.team-b-api.api.in.team-a, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-b.team-b-api.api.in.team-a
+  policy: |
+    path "shared/kv/data/dev/from-team-a/to-team-b/*"     { capabilities = ["read", "list"] }
+    path "shared/kv/metadata/dev/from-team-a/to-team-b/*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team-b.team-b-api.api.in.team-a, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-b.team-b-api.api.in.team-a
+  path: mto/workloads
+  targetServiceAccounts: [api]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-b-api, stakater.com/tenant: team-b }
+  policies: [share.team-b.team-b-api.api.in.team-a]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata: { name: share.team.team-core.core.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team.team-core.core.out.team-b
+  policy: |
+    path "shared/kv/data/dev/from-team/to-team-b/*"     { capabilities = ["create", "read", "update", "list"] }
+    path "shared/kv/metadata/dev/from-team/to-team-b/*" { capabilities = ["create", "read", "update", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team.team-core.core.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team.team-core.core.out.team-b
+  path: mto/workloads
+  targetServiceAccounts: [core]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-core, stakater.com/tenant: team }
+  policies: [share.team.team-core.core.out.team-b]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400

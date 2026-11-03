@@ -1,7 +1,7 @@
 # ADR-0005: Data outlives definitions
 
-- **Status:** Proposed
-- **Date:** 2026-10-03
+- **Status:** Accepted
+- **Date:** 2026-10-03; accepted 2026-11-03
 
 ## Context
 

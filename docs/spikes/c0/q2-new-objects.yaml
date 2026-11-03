@@ -1,0 +1,112 @@
+# Question 2: one new object of every kind the charts render, created and then
+# deleted while VCO holds only the narrowed policy (vco-admin-policy.hcl).
+# The SSO config takes a throwaway public key, made at run time and put in
+# place of the placeholder line, instead of an identity provider: the question
+# is VCO's Vault access, not OIDC.
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: team-c-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: team-c
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team-c.team-c-api.app
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-c.team-c-api.app
+  policy: |
+    path "team-c/kv/data/dev/team-c-api/app/*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team-c.team-c-api.app
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-c.team-c-api.app
+  path: mto/workloads
+  targetServiceAccounts: [app]
+  targetNamespaces:
+    targetNamespaces: [team-c-api]
+  policies: [kv.team-c.team-c-api.app]
+  tokenType: service
+  tokenTTL: 3600
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata:
+  name: sso
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: mto
+  name: sso
+  type: oidc
+  config:
+    listingVisibility: hidden
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineConfig
+metadata:
+  name: sso-config
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: mto/sso
+  JWTValidationPubKeys:
+    - |
+      __PUBKEY__
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineRole
+metadata:
+  name: sso.team-a.editor
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: sso.team-a.editor
+  path: mto/sso
+  roleType: jwt
+  userClaim: sub
+  boundAudiences: [vault]
+  boundClaims:
+    groups: [team-a-editors]
+  tokenPolicies: [sso.team-a.editor]
+  allowedRedirectURIs: ["http://localhost:8250/oidc/callback"]

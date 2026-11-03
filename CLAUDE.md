@@ -7,43 +7,51 @@ Guidance for working in this repository.
 **The Vault Community Edition extension for the Multi-Tenant Operator.** It
 gives every Multi-Tenant Operator `Tenant` a secret scope in one shared Vault
 Community — its own KV mount, a policy and login role per annotated
-ServiceAccount, SSO in four tiers, opt-in sharing — with no per-tenant manual
-work. Community Edition has no namespaces, so a tenant is a mount path plus
-policies plus auth roles, not a Vault namespace.
+ServiceAccount, SSO in four roles, opt-in sharing — with no per-tenant manual
+work. Community Edition has no namespaces, so a tenant is a path prefix —
+its KV mount `<tenant>/kv`, its auth mounts `auth/<tenant>/…`, policies and
+roles — not a Vault namespace.
 
 It is a **port of `stakater/mto-extension-vault-enterprise`**: the same Helm
 charts shape, the same vault-config-operator (VCO) CRs, and the same workload
-contract (annotations, tiers, names, ConfigMap keys). `docs/design.md` §2 lists
+contract (annotations, roles, names, ConfigMap keys). `docs/design.md` §2 lists
 the only three differences.
 
-## Status: design phase — no code yet
+## Status: porting the charts, story by story
 
-This repo holds **requirements and design only**. No chart yet. `make verify`
-already gates the docs: markdownlint, relative links, the method checks in
-`hack/check_method.py` and their tests. CI runs it on every PR, plus the
-ADR-immutability and story-citation checks. Every story is 📝 Draft until a human approves it. The first story
-is **C.0, a live-install spike** on Vault Community — do it before porting any
-chart.
+C.0, the live-install spike, is done (`docs/spikes/c0-findings.md`); ADRs
+0001 to 0006 are Accepted. The charts are being ported from the Enterprise
+extension one story at a time (`docs/roadmap.md`, Phases 1 and 2). `make
+verify` is the gate: markdownlint, relative links, the method checks, chart
+lint, the render tests (`hack/chart-render-tests.sh`) and CRD validation
+against the vendored VCO CRDs. CI runs it on every PR, plus the version-bump,
+ADR-immutability and story-citation checks.
 
 ## Invariants — never violate these
 
-1. **Every rendered policy passes the scope check** (design §4, ADR-0003): every
-   path inside the tenant's mount `<tenant>/kv/` or its named shares in
-   `shared/kv/`; the tenant segment closed by `/` before any wildcard; no `+`;
-   nothing under `sys/`, `auth/`, `identity/`, `cubbyhole/`. A policy that fails
-   it must fail the render.
+1. **Every rendered policy and role passes the scope check** (design §4,
+   ADR-0003): every path inside the tenant's mount `<tenant>/kv/` or its named
+   shares in `shared/kv/`; the tenant segment closed by `/` before any
+   wildcard; no `+`; nothing under `sys/`, `auth/`, `identity/`, `cubbyhole/`;
+   a role binds only its own policy, its tenant's mount and its namespace by
+   name and tenant label. A violation fails the render, and the admission
+   policies refuse it at the API server.
 1. **Every name is tenant-qualified** in one of the Enterprise name families
    (`kv.` 4 parts, `share.` 6, `sso.` 3). Community Edition has one namespace;
    an unqualified name collides across tenants (baseline N2).
 1. **No `Namespace` CR and no `targetNamespace`** anywhere.
-1. **Tenants never administer Vault** (ADR-0004): no tier writes policies,
+1. **Tenants never administer Vault** (ADR-0004): no role writes policies,
    mounts, auth or identity.
-1. **VCO is bounded by name** (ADR-0006): it can't write a policy outside the
-   three families, can't touch `auth/kubernetes`, can't delete a mount.
+1. **VCO is bounded by name and type, its input at admission** (ADR-0006):
+   it can't write a policy outside the three families, can't touch
+   `auth/kubernetes`, can't delete a kv mount, can't mount another type. Its
+   policy does not bound what a policy grants, so VCO's token is
+   root-equivalent and every VCO CR in `vault-config` passes the admission
+   policies.
 1. **Data outlives definitions** (ADR-0005): the tenant mount is rendered by the
-   parent; VCO is denied mount deletion; purge is a Vault-admin act.
+   parent; VCO is denied kv mount deletion; purge is a Vault-admin act.
 1. **Contract parity with Enterprise** (ADR-0001): a change to annotations,
-   tiers, names or ConfigMap keys is made in both repos or not at all.
+   roles, names or ConfigMap keys is made in both repos or not at all.
 
 ## Legacy — do not model on these
 

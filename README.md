@@ -4,7 +4,7 @@ The HashiCorp Vault **Community Edition** extension for the
 [Multi-Tenant Operator](https://github.com/stakater/multi-tenant-operator).
 Community Edition has no namespaces, so this extension gives every `Tenant` a
 **secret scope** built from what Community has: its own KV mount, a policy and
-login role per application, SSO roles per tier — every policy checked so it
+login role per application, SSO roles per role — every policy checked so it
 never reaches past its tenant. Developers write the same annotations as with
 the Vault Enterprise and OpenBao extensions.
 
@@ -28,7 +28,7 @@ the Vault Enterprise and OpenBao extensions.
 |---|---|---|
 | Vault Enterprise | a Vault namespace | [mto-extension-vault-enterprise](https://github.com/stakater/mto-extension-vault-enterprise) |
 | OpenBao | an OpenBao namespace | [mto-extension-openbao](https://github.com/stakater/mto-extension-openbao) |
-| Vault Community | a mount + policies + login roles | this repo |
+| Vault Community | a path prefix: `<tenant>/kv`, auth mounts `auth/<tenant>/…`, policies, login roles | this repo |
 
 ## How it is built
 
