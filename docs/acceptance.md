@@ -132,7 +132,10 @@ mount and its secrets; the docs say so and give the purge steps.
 
 **AC-PAR-1 — Same contract as Enterprise.** *(R)* Annotation keys, role names,
 name families and ConfigMap key names equal the pinned Enterprise chart's;
-only `VAULT_NAMESPACE` and the mount prefix in paths differ.
+only `VAULT_NAMESPACE` and the mount prefix in paths differ. Checked by the
+render test `contract` (`hack/contract.sh` against
+`hack/enterprise-contract.txt`; any difference must be listed in
+`hack/contract-delta.txt` with the story that removes it).
 **AC-OPS-1 — VCO errors surface per tenant.** *(L)* A broken role shows in
 `kubernetesAuthEngineRoleLastError` on the child TI (the mechanism observed in
 C.0, with `secretEngineMountLastError` and `policyLastError`).

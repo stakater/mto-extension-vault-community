@@ -460,3 +460,24 @@ e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
 .PHONY: admission-test
 admission-test: ## Run the admission-policy cases against the lab (server-side dry runs; needs lab-bootstrap).
 	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) CONFIG_NS=$(CONFIG_NS) ./hack/lab/admission-cases.sh
+
+# ─── Contract parity ─────────────────────────────────────────────────
+
+# The Enterprise tenant chart whose workload contract this chart keeps
+# (ADR-0001). contract-sync archives ENTERPRISE_REF into a scratch directory:
+# it never switches the checkout's branch.
+ENTERPRISE_SRC ?= ../mto-extension-vault-enterprise
+ENTERPRISE_REF ?= origin/main
+
+.PHONY: contract-sync
+contract-sync: helm yq ## Regenerate hack/enterprise-contract.txt from ENTERPRISE_REF of ENTERPRISE_SRC.
+	@test -d $(ENTERPRISE_SRC)/charts/mto-extension-vault-enterprise || { echo "error: ENTERPRISE_SRC=$(ENTERPRISE_SRC) is not an Enterprise extension checkout" >&2; exit 1; }
+	git -C $(ENTERPRISE_SRC) fetch -q origin
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT \
+		&& git -C $(ENTERPRISE_SRC) archive $(ENTERPRISE_REF) charts/mto-extension-vault-enterprise | tar -x -C "$$tmp" \
+		&& sha=$$(git -C $(ENTERPRISE_SRC) rev-parse --short $(ENTERPRISE_REF)) \
+		&& { echo "# The workload contract of the Enterprise tenant chart, from hack/contract.sh."; \
+		     echo "# Source: stakater/mto-extension-vault-enterprise $(ENTERPRISE_REF) at $$sha."; \
+		     echo "# Regenerate with: make contract-sync ENTERPRISE_SRC=<checkout> ENTERPRISE_REF=<ref>"; \
+		     HELM=$(HELM) YQ=$(YQ_BIN) ./hack/contract.sh "$$tmp/charts/mto-extension-vault-enterprise"; } > hack/enterprise-contract.txt
+	@echo "regenerated hack/enterprise-contract.txt — review the diff, and the delta in hack/contract-delta.txt"

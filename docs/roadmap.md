@@ -105,7 +105,7 @@ Done: slice `eso` ported with `path: <tenant>/kv` and no namespace; live: the
 pod sees the value. Satisfies **AC-DEL-1**. Planning:
 [`planning/C4-delivery-through-eso.md`](planning/C4-delivery-through-eso.md).
 
-**Story C.5 — Contract parity with Enterprise** 👍 *Approved*
+**Story C.5 — Contract parity with Enterprise** ✅ *Done*
 
 As a platform team that may move editions, I want the annotations, roles,
 names and ConfigMap keys to be exactly the Enterprise extension's, so that
@@ -114,7 +114,8 @@ moving a tenant never changes a workload.
 Done: a render check compares this chart's contract against the pinned
 Enterprise chart's (annotation keys, role names, name families, ConfigMap key
 set minus `VAULT_NAMESPACE` value); fails on any drift. Satisfies
-**AC-PAR-1**.
+**AC-PAR-1**. Planning:
+[`planning/C5-contract-parity.md`](planning/C5-contract-parity.md).
 
 > **Phase 1 demo:** create `team-a` and `team-b`; annotate `web`; deliver
 > `postgres` to the pod; show `web` refused on `team-b/kv/`; show VCO refused

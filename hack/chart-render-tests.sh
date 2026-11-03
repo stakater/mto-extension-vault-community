@@ -47,6 +47,10 @@
 #   tokentype    — every role pins tokenType; batch + period fails.
 #   namecollide  — no two objects of one render share an identity, and parts
 #                  that glued to one name with hyphens now give distinct names.
+#   contract     — the workload contract (annotation keys, Deployment forms, role
+#                  names, object names, ConfigMap keys; hack/contract.sh) equals
+#                  the pinned Enterprise chart's (hack/enterprise-contract.txt),
+#                  except exactly the lines in hack/contract-delta.txt.
 #
 # Bootstrap and parent:
 #   emission     — the parent emits one TI per enabled slice per tenant with a
@@ -506,6 +510,21 @@ printf 'tenant: a\nserviceAccounts:\n  - metadata: {name: d, namespace: b-c, ann
 printf 'tenant: a-b\nserviceAccounts:\n  - metadata: {name: d, namespace: c, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/xb.yaml"
 nc_pair "a/b-c vs a-b/c" "$WORK/xa.yaml" "$WORK/xb.yaml"
 check namecollide "$nc_ok" "$nc_detail"
+
+# contract
+ct_ok=0; ct_detail=""
+HELM="$HELM" YQ="$YQ" "$REPO_ROOT/hack/contract.sh" "$CHART" > "$WORK/contract.txt" 2>"$WORK/contract.err" \
+  || { echo "FAIL  infra — hack/contract.sh failed: $(first "$WORK/contract.err")"; exit 1; }
+[ "$(lines "$(cat "$WORK/contract.txt")")" -ge 20 ] || { ct_ok=1; ct_detail="$ct_detail [the contract has $(lines "$(cat "$WORK/contract.txt")") lines — the check proves nothing]"; }
+grep -v '^#' "$REPO_ROOT/hack/enterprise-contract.txt" | grep . | sort -u > "$WORK/ent-contract.txt"
+{ comm -23 "$WORK/ent-contract.txt" "$WORK/contract.txt" | sed 's/^/- /'
+  comm -13 "$WORK/ent-contract.txt" "$WORK/contract.txt" | sed 's/^/+ /'; } | sort > "$WORK/delta.real"
+grep -v '^#' "$REPO_ROOT/hack/contract-delta.txt" | sed 's/  #.*$//' | grep . | sort > "$WORK/delta.want"
+if ! diff "$WORK/delta.want" "$WORK/delta.real" > "$WORK/delta.diff"; then
+  ct_ok=1
+  ct_detail="$ct_detail [the contract drifted from Enterprise beyond hack/contract-delta.txt: $(grep -E '^[<>]' "$WORK/delta.diff" | sed -e 's/^< /listed but not real: /' -e 's/^> /real but not listed: /' | tr '\n' '|')]"
+fi
+check contract "$ct_ok" "$ct_detail"
 
 # ─── The parent gotemplate, through a shim chart ─────────────────────────────
 mkdir -p "$WORK/shim/templates" "$WORK/shim/files"
