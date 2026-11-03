@@ -39,7 +39,7 @@ validate() { # validate <label> <manifest> <expected-count>
 expected() { # expected <fixture> <component> -> VCO CR count that render emits
   [ "$2" = eso ] && { echo 0; return; }
   case "$1" in
-    full) echo 20 ;; guards) echo 6 ;; no-optins) echo 2 ;; no-workloads) echo 12 ;;
+    full) echo 20 ;; guards) echo 10 ;; no-optins) echo 2 ;; no-workloads) echo 12 ;;
     *) echo "no expected count for fixture $1" >&2; exit 1 ;;
   esac
 }

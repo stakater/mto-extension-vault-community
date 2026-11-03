@@ -59,6 +59,11 @@
 //     "a namespace bound with another tenant's label" (hack/lab/admission-cases.sh, C.3)
 //   - the admission policies off: the tenant Template's Policy is written into
 //     the config namespace (the origin step's hold fails, C.3)
+//   - every SSO role also bound to the viewers' group: the scope admission
+//     policy refuses the roles at Template Operator's dry run, so the tenant's
+//     TemplateInstance never becomes Ready (install step, C.6). The mutated
+//     role never reaches Vault, so bob's refused editor login is not mutated
+//     live while admission is on.
 package e2e
 
 import (

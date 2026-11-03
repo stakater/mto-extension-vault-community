@@ -24,6 +24,8 @@ import (
 //	                            SA admin   kv admin
 //	                            SA auditor kv audit-read
 //	           e2e-alpha-tools  SA web     no annotation: web's name in another namespace
+//	                            SA sub     kv editor, subscribes to e2e-alpha-dev
+//	                            SA nosub   kv editor, no subscription
 //	           e2e-alpha-reuse  SA app     kv editor; the namespace is deleted and
 //	                                       created again under e2e-beta
 //	e2e-beta   e2e-beta-dev     SA reader  kv viewer
@@ -51,6 +53,9 @@ func roleName(tenant, ns, sa string) string { return "kv." + tenant + "." + ns +
 
 // appPath is an app's own KV prefix inside its tenant's mount: <env>/<ns>/<app>.
 func appPath(ns, app, leaf string) string { return env + "/" + ns + "/" + app + "/" + leaf }
+
+// sharedPath is a namespace's intra-tenant write area: <env>/_shared/from-<ns>.
+func sharedPath(ns, leaf string) string { return env + "/_shared/from-" + ns + "/" + leaf }
 
 // TestE2E is one ordered scenario against one install. Each step depends on the
 // state the previous one left, so the steps are subtests of one test and a
@@ -164,6 +169,14 @@ func TestE2E(t *testing.T) {
 		// a ServiceAccount name AND a namespace, and the login refusals below
 		// change one of the two at a time.
 		createServiceAccount(t, toolsNS, "web", nil)
+		// An editor: a read-only subscription must hold even for a role that can
+		// write its own prefixes — with viewer the refusals could not fail.
+		createServiceAccount(t, toolsNS, "sub", map[string]string{
+			annPrefix + "kv":              "true",
+			annPrefix + "role":            "editor",
+			annPrefix + "kv-subscribe-ns": alphaNS,
+		})
+		createServiceAccount(t, toolsNS, "nosub", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		createServiceAccount(t, betaNS, "reader", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "viewer"})
 		createServiceAccount(t, coreNS, "core", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "admin"})
@@ -189,6 +202,7 @@ func TestE2E(t *testing.T) {
 		}
 		for _, r := range []string{roleName(alpha, alphaNS, "web"), roleName(alpha, alphaNS, "viewer"),
 			roleName(alpha, alphaNS, "admin"), roleName(alpha, alphaNS, "auditor"), roleName(alpha, reuseNS, "app"),
+			roleName(alpha, toolsNS, "sub"), roleName(alpha, toolsNS, "nosub"),
 			roleName(beta, betaNS, "reader"), roleName(prefixT, coreNS, "core")} {
 			waitVCO(t, "policies", r)
 			waitVCO(t, "kubernetesauthengineroles", r)
@@ -884,6 +898,80 @@ spec:
 			return ""
 		})
 		deleteDeployment(t, alphaNS, "cfg-reader")
+	})
+
+	step("intra-tenant: apps in one namespace share through _shared/", func(t *testing.T) {
+		// AC-SHR-1. web (editor) writes its namespace's shared area; viewer, in
+		// the same namespace, reads it without any annotation — and cannot write it.
+		if err := kvPut(t, webToken, alpha, sharedPath(alphaNS, "common"), "url=https://db.internal"); err != nil {
+			t.Fatalf("editor could not write its namespace's _shared/: %v", err)
+		}
+		viewerToken, _ := vaultLogin(t, alpha, roleName(alpha, alphaNS, "viewer"), saToken(t, alphaNS, "viewer"))
+		if got, err := kvGet(t, viewerToken, alpha, sharedPath(alphaNS, "common"), "url"); err != nil || got != "https://db.internal" {
+			t.Fatalf("an app in the same namespace could not read _shared/: got %q, err %v", got, err)
+		}
+		if err := kvPut(t, viewerToken, alpha, sharedPath(alphaNS, "common"), "url=tampered"); !refused(err) {
+			t.Errorf("viewer role wrote to _shared/; err: %v", err)
+		}
+	})
+
+	step("intra-tenant: another namespace subscribes with kv-subscribe-ns", func(t *testing.T) {
+		// AC-SHR-2.
+		subToken, _ := vaultLogin(t, alpha, roleName(alpha, toolsNS, "sub"), saToken(t, toolsNS, "sub"))
+		if got, err := kvGet(t, subToken, alpha, sharedPath(alphaNS, "common"), "url"); err != nil || got != "https://db.internal" {
+			t.Fatalf("subscriber could not read the producer's _shared/: got %q, err %v", got, err)
+		}
+		// A subscription is read-only on the producer's prefix, on the metadata
+		// path too: KV v2 metadata update sets max_versions, which destroys
+		// versions. sub is an editor, and its role grants that update on its own
+		// prefixes, so the refusal fails if the subscription grant is widened to
+		// the role's caps. The producer's update on the same path shows the call
+		// itself works.
+		if err := kvPut(t, subToken, alpha, sharedPath(alphaNS, "common"), "url=tampered"); !refused(err) {
+			t.Errorf("subscriber wrote to the producer's _shared/; err: %v", err)
+		}
+		if err := kvMetadataPut(t, webToken, alpha, sharedPath(alphaNS, "common"), "-max-versions=5"); err != nil {
+			t.Fatalf("the producer could not update its own _shared/ metadata: %v", err)
+		}
+		if err := kvMetadataPut(t, subToken, alpha, sharedPath(alphaNS, "common"), "-max-versions=1"); !refused(err) {
+			t.Errorf("subscriber updated the producer's secret metadata; err: %v", err)
+		}
+		// Same tenant, no annotation: no grant. An editor role does not help.
+		nosubToken, _ := vaultLogin(t, alpha, roleName(alpha, toolsNS, "nosub"), saToken(t, toolsNS, "nosub"))
+		if _, err := kvGet(t, nosubToken, alpha, sharedPath(alphaNS, "common"), "url"); !refused(err) {
+			t.Errorf("an unsubscribed app read another namespace's _shared/; err: %v", err)
+		}
+		// The value survived every refused write above.
+		if got, err := kvGet(t, webToken, alpha, sharedPath(alphaNS, "common"), "url"); err != nil || got != "https://db.internal" {
+			t.Errorf("_shared/ value changed: got %q, err %v", got, err)
+		}
+
+		createDeployment(t, toolsNS, "sub", "sub", map[string]string{
+			annPrefix + "kv-subscribe.common": alphaNS + "/common#url",
+		}, []corev1.EnvVar{secretEnv("DB_URL", "sub-common", "url")})
+		waitFor(t, "ExternalSecret sub-common synced", func() string {
+			if v := secretValue(t, toolsNS, "sub-common", "url"); v != "https://db.internal" {
+				o := get(t, gvrExternalSecret, toolsNS, "sub-common")
+				if o == nil {
+					return "ExternalSecret absent"
+				}
+				s, msg := condition(o, "Ready")
+				return fmt.Sprintf("Secret url=%q; ExternalSecret Ready=%q %s", v, s, msg)
+			}
+			return ""
+		})
+		waitFor(t, "the sub pod sees DB_URL", func() string {
+			p := runningPod(t, toolsNS, "sub")
+			if p == "" {
+				return "no single ready pod"
+			}
+			if v, err := podEnv(t, toolsNS, p, "DB_URL"); err != nil {
+				return err.Error()
+			} else if v != "https://db.internal" {
+				return "DB_URL=" + v
+			}
+			return ""
+		})
 	})
 
 	step("isolation: a namespace name reused by another tenant gets nothing", func(t *testing.T) {

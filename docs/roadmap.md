@@ -141,7 +141,7 @@ Vault; a person removed from the group can't log in again. Satisfies
 **AC-ISO-6**, **AC-ISO-9**, **AC-ACC-1..4** (people), **AC-ACC-6**. Planning:
 [`planning/C6-human-sso.md`](planning/C6-human-sso.md).
 
-**Story C.7 — Sharing inside a tenant** 👍 *Approved*
+**Story C.7 — Sharing inside a tenant** ✅ *Done*
 
 As an application team, I want apps in one namespace, and subscribed
 namespaces of my tenant, to share secrets through one folder, so that sharing
@@ -151,7 +151,8 @@ Done: the `_shared/from-<ns>/` grants and `kv-subscribe-ns` under the tenant
 mount, read-only for subscribers on data and metadata; the `kv-subscribe.<name>`
 Deployment annotation; live: `web` writes, `jobs` and a subscribed namespace
 read, an unsubscribed namespace is refused. Satisfies **AC-SHR-1**,
-**AC-SHR-2**.
+**AC-SHR-2**. Planning:
+[`planning/C7-sharing-inside-a-tenant.md`](planning/C7-sharing-inside-a-tenant.md).
 
 **Story C.8 — Sharing across tenants** 👍 *Approved*
 

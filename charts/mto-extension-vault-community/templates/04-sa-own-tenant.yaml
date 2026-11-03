@@ -17,6 +17,7 @@ by namespaceSelector matchLabels { <tenantLabelKey>: <tenant> }.
   vault.stakater.com/kv                "true" → the app's own KV prefix
   vault.stakater.com/role              required with kv: viewer | editor | admin | audit-read
   vault.stakater.com/app               optional: the app that owns the KV prefix (default: SA name)
+  vault.stakater.com/kv-subscribe-ns   intra-tenant: CSV of writer namespaces, read-only
 
 Vault Community has no namespaces: every path starts with the tenant, and the
 policy is the only wall between tenants. Every policy passes the scope check
@@ -46,6 +47,7 @@ policy is the only wall between tenants. Every policy passes the scope check
 {{- $app := $f.app }}
 {{- $role := $f.role }}
 {{- $caps := $f.caps }}
+{{- $subscribeRaw := dig "metadata" "annotations" "vault.stakater.com/kv-subscribe-ns" "" $sa }}
 {{- if and $f.errors $saName $saNs }}
 {{- $m := index $idxErrs $saNs | default (dict) }}
 {{- $_ := set $m $saName (printf "error: Vault annotations rejected — see ConfigMap vault-config-%s.error in this namespace" $saName) }}
@@ -74,6 +76,41 @@ policy is the only wall between tenants. Every policy passes the scope check
 {{- $policy = append $policy (printf "path \"%s/delete/%s/%s/%s/*\"   { capabilities = [\"update\"] }" $kv $env $saNs $app) }}
 {{- $policy = append $policy (printf "path \"%s/undelete/%s/%s/%s/*\" { capabilities = [\"update\"] }" $kv $env $saNs $app) }}
 {{- $policy = append $policy (printf "path \"%s/destroy/%s/%s/%s/*\"  { capabilities = [\"update\"] }" $kv $env $saNs $app) }}
+{{- end }}
+{{- /* 2a. _shared/ READ — the own namespace's sub-prefix, for every role that
+       reads data. This is how two apps in one namespace share deliberately. */ -}}
+{{- $policy = append $policy (printf "# 2. Sharing inside the tenant, under %s/data/%s/_shared/from-<namespace>/." $kv $env) }}
+{{- if ne $role "audit-read" }}
+{{- $policy = append $policy (printf "path \"%s/data/%s/_shared/from-%s/*\"     { capabilities = [\"read\", \"list\"] }" $kv $env $saNs) }}
+{{- end }}
+{{- $policy = append $policy (printf "path \"%s/metadata/%s/_shared/from-%s/*\" { capabilities = %s }" $kv $env $saNs $caps) }}
+{{- /* Subscriptions are READ-ONLY on the producing namespace's prefix, on
+       BOTH the data and the metadata path. In KV v2 the metadata endpoint is
+       where the secret's lifecycle lives: `update` sets max_versions /
+       delete_version_after / cas_required and `delete` removes every
+       version, so a subscriber with its own role caps here could destroy
+       secrets it only reads. */ -}}
+{{- if $subscribeRaw }}
+{{- $subCaps := ternary "[\"list\"]" "[\"read\", \"list\"]" (eq $role "audit-read") }}
+{{- range $subNs := splitList "," $subscribeRaw }}
+{{- $subNs = trim $subNs }}
+{{- if $subNs }}
+{{- if ne $role "audit-read" }}
+{{- $policy = append $policy (printf "path \"%s/data/%s/_shared/from-%s/*\"     { capabilities = [\"read\", \"list\"] }" $kv $env $subNs) }}
+{{- end }}
+{{- $policy = append $policy (printf "path \"%s/metadata/%s/_shared/from-%s/*\" { capabilities = %s }" $kv $env $subNs $subCaps) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* 2b. _shared/ WRITE, scoped to the own namespace's sub-prefix. */ -}}
+{{- if or (eq $role "editor") (eq $role "admin") }}
+{{- $policy = append $policy (printf "path \"%s/data/%s/_shared/from-%s/*\"     { capabilities = %s }" $kv $env $saNs $caps) }}
+{{- $policy = append $policy (printf "path \"%s/metadata/%s/_shared/from-%s/*\" { capabilities = %s }" $kv $env $saNs $caps) }}
+{{- end }}
+{{- if eq $role "admin" }}
+{{- $policy = append $policy (printf "path \"%s/delete/%s/_shared/from-%s/*\"   { capabilities = [\"update\"] }" $kv $env $saNs) }}
+{{- $policy = append $policy (printf "path \"%s/undelete/%s/_shared/from-%s/*\" { capabilities = [\"update\"] }" $kv $env $saNs) }}
+{{- $policy = append $policy (printf "path \"%s/destroy/%s/_shared/from-%s/*\"  { capabilities = [\"update\"] }" $kv $env $saNs) }}
 {{- end }}
 {{- $body := join "\n" $policy }}
 {{- include "vault.assertPolicyScope" (dict "name" $roleName "policy" $body "ctx" $) }}
@@ -131,6 +168,16 @@ data:
   VAULT_KV_APP: {{ $app | quote }}
   VAULT_KV_APP_PATH: {{ printf "%s/data/%s/%s/%s/" $kv $env $saNs $app }}
   VAULT_KV_APP_META_PATH: {{ printf "%s/metadata/%s/%s/%s/" $kv $env $saNs $app }}
+  VAULT_KV_SHARED_OUT_PATH: {{ printf "%s/data/%s/_shared/from-%s/" $kv $env $saNs }}
+  {{- if $subscribeRaw }}
+  {{- range $subNs := splitList "," $subscribeRaw }}
+  {{- $subNs = trim $subNs }}
+  {{- if $subNs }}
+  {{- $subKey := upper (replace "-" "_" $subNs) }}
+  VAULT_FROM_{{ $subKey }}_PATH: {{ printf "%s/data/%s/_shared/from-%s/" $kv $env $subNs }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
 {{- if and $.Values.vaultCABundle (not (hasKey $caBundleDone $saNs)) }}
 {{- $_ := set $caBundleDone $saNs true }}
 ---
@@ -200,6 +247,10 @@ metadata:
 data:
   _format: "v1"
   _usage: "One entry per app that uses Vault in this namespace. Paths are API data paths; in the Vault UI open the {{ $kv }} mount and browse <env>/<namespace>/<app>/. The vault-config-<serviceaccount> ConfigMap holds the full environment for one app."
+  {{- if $healthy }}
+  _namespace: |
+    sharedOutPath: {{ printf "%s/data/%s/_shared/from-%s/" $kv $env $ns }}
+  {{- end }}
   {{- range $appName, $entry := $healthy }}
   {{ $appName | quote }}: |
     {{- $entry | nindent 4 }}

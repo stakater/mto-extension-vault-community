@@ -3,15 +3,11 @@
 # chart only. Every line names the story that removes it; the contract check
 # fails if the real difference is not exactly this list.
 - annotation.deployment kv-import.<name>  # C.8 sharing across tenants
-- annotation.deployment kv-subscribe.<name>  # C.7 sharing inside a tenant
 - annotation.serviceaccount kv-export-tenant  # C.8 sharing across tenants
 - annotation.serviceaccount kv-import-tenant  # C.8 sharing across tenants
-- annotation.serviceaccount kv-subscribe-ns  # C.7 sharing inside a tenant
-- configmap.key VAULT_FROM_<NS>_PATH  # C.7 sharing inside a tenant
 - configmap.key VAULT_IN_<PEER>_NAMESPACE  # C.8 sharing across tenants
 - configmap.key VAULT_IN_<PEER>_PATH  # C.8 sharing across tenants
 - configmap.key VAULT_IN_<PEER>_ROLE  # C.8 sharing across tenants
-- configmap.key VAULT_KV_SHARED_OUT_PATH  # C.7 sharing inside a tenant
 - configmap.key VAULT_OUT_<PEER>_NAMESPACE  # C.8 sharing across tenants
 - configmap.key VAULT_OUT_<PEER>_PATH  # C.8 sharing across tenants
 - configmap.key VAULT_OUT_<PEER>_ROLE  # C.8 sharing across tenants
@@ -23,4 +19,3 @@
 - object SecretStore <ns>/<sa>.share-<peer>-vault  # C.8 sharing across tenants
 + object ConfigMap <ns>/vault-config-<sa>.error  # C.7 and C.8: the feature ServiceAccounts' annotations are unknown until then
 + object ConfigMap <ns>/vault-config-imp-d.deploy-error  # C.8 sharing across tenants
-+ object ConfigMap <ns>/vault-config-sub-d.deploy-error  # C.7 sharing inside a tenant

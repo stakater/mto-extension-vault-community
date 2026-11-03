@@ -306,7 +306,7 @@ annotation must be added here too, or it is rejected as unknown — loud, and th
 safe direction to fail.
 */}}
 {{- define "vault.saAnnotationKeys" -}}
-{{- $keys := list "kv" "role" "app" -}}
+{{- $keys := list "kv" "role" "app" "kv-subscribe-ns" -}}
 {{- toYaml $keys -}}
 {{- end -}}
 
@@ -424,6 +424,22 @@ tenant and freeze unrelated namespaces.
 {{- $claim := index .appClaims (printf "%s/%s" $ns $app) -}}
 {{- if and $kvOn $claim (gt (len $claim) 1) -}}
 {{- $errs = append $errs (printf "app %q in namespace %s is claimed by more than one ServiceAccount (%s). Each app owns its own secret prefix, so the name must be unique within the namespace — change %sapp on all but one" $app $ns (join ", " $claim) $p) -}}
+{{- end -}}
+
+{{- /* A sharing annotation with KV off grants nothing. */ -}}
+{{- range $k := list "kv-subscribe-ns" -}}
+{{- if and (dig "metadata" "annotations" (printf "%s%s" $p $k) "" $sa) (not $kvOn) -}}
+{{- $errs = append $errs (printf "%s%s is set but %skv is not \"true\", so it grants nothing" $p $k $p) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* A namespace outside the tenant grants read on a prefix nothing of the
+       tenant writes to — and its name may be another tenant's. */ -}}
+{{- range $subNs := splitList "," (dig "metadata" "annotations" (printf "%skv-subscribe-ns" $p) "" $sa) -}}
+{{- $subNs = trim $subNs -}}
+{{- if and $subNs (not (hasKey $.tenantNamespaces $subNs)) -}}
+{{- $errs = append $errs (printf "%skv-subscribe-ns references namespace %q, which is not a namespace of tenant %q (tenant owns: %s)" $p $subNs $v.tenant (join ", " (keys $.tenantNamespaces | sortAlpha))) -}}
+{{- end -}}
 {{- end -}}
 
 {{- $out := dict

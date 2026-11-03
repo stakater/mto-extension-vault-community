@@ -10,6 +10,32 @@ metadata:
     helm.sh/chart: mto-extension-vault-community-0.1.0
     stakater.com/tenant: team-a
     vault.stakater.com/app: payments
+  name: app-a-tools-shared
+  namespace: team-a-dev
+spec:
+  dataFrom:
+    - extract:
+        key: dev/_shared/from-team-a-tools/shared-item
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: app-a-vault
+  target:
+    creationPolicy: Owner
+    name: app-a-tools-shared
+---
+# Source: mto-extension-vault-community/templates/05-deployment-externalsecrets.yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: payments
   name: app-a-web-cfg
   namespace: team-a-dev
 spec:
@@ -603,6 +629,13 @@ spec:
     # 1. The app's own secrets, at team-a/kv/data/dev/team-a-dev/payments/.
     path "team-a/kv/data/dev/team-a-dev/payments/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
     path "team-a/kv/metadata/dev/team-a-dev/payments/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    # 2. Sharing inside the tenant, under team-a/kv/data/dev/_shared/from-<namespace>/.
+    path "team-a/kv/data/dev/_shared/from-team-a-dev/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-dev/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-tools/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-tools/*" { capabilities = ["read", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-dev/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-dev/*" { capabilities = ["create", "read", "update", "patch", "list"] }
 ---
 # Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
@@ -628,6 +661,9 @@ spec:
     # 1. The app's own secrets, at team-a/kv/data/dev/team-a-dev/app-c/.
     path "team-a/kv/data/dev/team-a-dev/app-c/*"     { capabilities = ["read", "list"] }
     path "team-a/kv/metadata/dev/team-a-dev/app-c/*" { capabilities = ["read", "list"] }
+    # 2. Sharing inside the tenant, under team-a/kv/data/dev/_shared/from-<namespace>/.
+    path "team-a/kv/data/dev/_shared/from-team-a-dev/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-dev/*" { capabilities = ["read", "list"] }
 ---
 # Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
@@ -656,6 +692,14 @@ spec:
     path "team-a/kv/delete/dev/team-a-tools/app-b/*"   { capabilities = ["update"] }
     path "team-a/kv/undelete/dev/team-a-tools/app-b/*" { capabilities = ["update"] }
     path "team-a/kv/destroy/dev/team-a-tools/app-b/*"  { capabilities = ["update"] }
+    # 2. Sharing inside the tenant, under team-a/kv/data/dev/_shared/from-<namespace>/.
+    path "team-a/kv/data/dev/_shared/from-team-a-tools/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-tools/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-tools/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-tools/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/delete/dev/_shared/from-team-a-tools/*"   { capabilities = ["update"] }
+    path "team-a/kv/undelete/dev/_shared/from-team-a-tools/*" { capabilities = ["update"] }
+    path "team-a/kv/destroy/dev/_shared/from-team-a-tools/*"  { capabilities = ["update"] }
 ---
 # Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
@@ -681,6 +725,9 @@ spec:
     # 1. The app's own secrets, at team-a/kv/data/dev/team-a-tools/app-d/.
     path "team-a/kv/data/dev/team-a-tools/app-d/*"     { capabilities = ["list"] }
     path "team-a/kv/metadata/dev/team-a-tools/app-d/*" { capabilities = ["list"] }
+    # 2. Sharing inside the tenant, under team-a/kv/data/dev/_shared/from-<namespace>/.
+    path "team-a/kv/metadata/dev/_shared/from-team-a-tools/*" { capabilities = ["list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-dev/*" { capabilities = ["list"] }
 ---
 # Source: mto-extension-vault-community/templates/07-sso-policies.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
@@ -792,6 +839,8 @@ spec:
 apiVersion: v1
 data:
   _format: v1
+  _namespace: |
+    sharedOutPath: team-a/kv/data/dev/_shared/from-team-a-dev/
   _usage: One entry per app that uses Vault in this namespace. Paths are API data paths; in the Vault UI open the team-a/kv mount and browse <env>/<namespace>/<app>/. The vault-config-<serviceaccount> ConfigMap holds the full environment for one app.
   app-c: |
     serviceAccount: "app-c"
@@ -837,11 +886,13 @@ apiVersion: v1
 data:
   VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
   VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_FROM_TEAM_A_TOOLS_PATH: team-a/kv/data/dev/_shared/from-team-a-tools/
   VAULT_K8S_MOUNT: team-a/kubernetes/workloads
   VAULT_K8S_ROLE: kv.team-a.team-a-dev.app-a
   VAULT_KV_APP: payments
   VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-dev/payments/
   VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-dev/payments/
+  VAULT_KV_SHARED_OUT_PATH: team-a/kv/data/dev/_shared/from-team-a-dev/
   VAULT_NAMESPACE: ""
 kind: ConfigMap
 metadata:
@@ -866,6 +917,7 @@ data:
   VAULT_KV_APP: app-c
   VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-dev/app-c/
   VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-dev/app-c/
+  VAULT_KV_SHARED_OUT_PATH: team-a/kv/data/dev/_shared/from-team-a-dev/
   VAULT_NAMESPACE: ""
 kind: ConfigMap
 metadata:
@@ -884,6 +936,8 @@ metadata:
 apiVersion: v1
 data:
   _format: v1
+  _namespace: |
+    sharedOutPath: team-a/kv/data/dev/_shared/from-team-a-tools/
   _usage: One entry per app that uses Vault in this namespace. Paths are API data paths; in the Vault UI open the team-a/kv mount and browse <env>/<namespace>/<app>/. The vault-config-<serviceaccount> ConfigMap holds the full environment for one app.
   app-b: |
     serviceAccount: "app-b"
@@ -934,6 +988,7 @@ data:
   VAULT_KV_APP: app-b
   VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-tools/app-b/
   VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-tools/app-b/
+  VAULT_KV_SHARED_OUT_PATH: team-a/kv/data/dev/_shared/from-team-a-tools/
   VAULT_NAMESPACE: ""
 kind: ConfigMap
 metadata:
@@ -953,11 +1008,13 @@ apiVersion: v1
 data:
   VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
   VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_FROM_TEAM_A_DEV_PATH: team-a/kv/data/dev/_shared/from-team-a-dev/
   VAULT_K8S_MOUNT: team-a/kubernetes/workloads
   VAULT_K8S_ROLE: kv.team-a.team-a-tools.app-d
   VAULT_KV_APP: app-d
   VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-tools/app-d/
   VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-tools/app-d/
+  VAULT_KV_SHARED_OUT_PATH: team-a/kv/data/dev/_shared/from-team-a-tools/
   VAULT_NAMESPACE: ""
 kind: ConfigMap
 metadata:

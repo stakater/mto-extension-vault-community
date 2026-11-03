@@ -37,6 +37,8 @@
 #                  with no Vault namespace; every ExternalSecret key is relative
 #                  to that mount; with ESO off install-wide, a Deployment asking
 #                  for a secret gets a deploy-error and nothing else.
+#   subread      — a kv-subscribe-ns grant is read-only on the producer's prefix,
+#                  on the metadata path too; an audit-read subscriber lists only.
 #   guards       — every misconfigured ServiceAccount or Deployment gets an error
 #                  ConfigMap and nothing else; the correct ones in another
 #                  namespace still render; identical asks are deduped, clashing
@@ -392,7 +394,7 @@ yqs eskeys 'select(.kind == "ExternalSecret") | .metadata.name + " " + ((.spec.d
 [ -n "$eskeys" ] || { sp_ok=1; sp_detail="$sp_detail [no ExternalSecret rendered — the check proves nothing]"; }
 while read -r name key; do
   case "$key" in
-    dev/team-a-dev/payments/*) ;;
+    dev/team-a-dev/payments/*|dev/_shared/from-team-a-tools/*) ;;
     *) sp_detail="$sp_detail [$name reads $key, not relative to the tenant mount under dev/team-a-dev/payments/]" ;;
   esac
 done <<<"$eskeys"
@@ -405,6 +407,28 @@ grep -q 'External Secrets Operator is disabled' <<<"$esoerr" || sp_detail="$sp_d
 [ -z "$sp_detail" ] || sp_ok=1
 check storepath "$sp_ok" "$sp_detail"
 
+# subread — app-a (editor) subscribes to team-a-tools; app-d (audit-read) to team-a-dev
+sr_ok=0; sr_detail=""
+pol() { "$YQ" e -N "select(.kind == \"Policy\" and .metadata.name == \"$1\") | .spec.policy" "$WORK/all.raw"; }
+pol kv.team-a.team-a-dev.app-a > "$WORK/pol-a"
+grep -q 'path "team-a/kv/metadata/dev/_shared/from-team-a-tools/\*" { capabilities = \["read", "list"\] }' "$WORK/pol-a" \
+  || { sr_ok=1; sr_detail="$sr_detail [editor subscriber metadata grant is not read/list]"; }
+grep -qE 'path "team-a/kv/data/dev/_shared/from-team-a-tools/\*" +\{ capabilities = \["read", "list"\] \}' "$WORK/pol-a" \
+  || { sr_ok=1; sr_detail="$sr_detail [editor subscriber data grant is not read/list]"; }
+grep 'from-team-a-tools' "$WORK/pol-a" > "$WORK/pol-a-sub" \
+  || { sr_ok=1; sr_detail="$sr_detail [no from-team-a-tools grant at all]"; }
+grep -qE '"(create|update|patch|delete)"' "$WORK/pol-a-sub" \
+  && { sr_ok=1; sr_detail="$sr_detail [a write capability on the producer's prefix]"; }
+pol kv.team-a.team-a-tools.app-d > "$WORK/pol-d"
+grep -q 'path "team-a/kv/metadata/dev/_shared/from-team-a-dev/\*" { capabilities = \["list"\] }' "$WORK/pol-d" \
+  || { sr_ok=1; sr_detail="$sr_detail [audit-read subscriber metadata grant is not list-only]"; }
+grep -q 'team-a/kv/data/dev/_shared/from-team-a-dev/' "$WORK/pol-d" \
+  && { sr_ok=1; sr_detail="$sr_detail [audit-read subscriber was granted data reads]"; }
+yqs fromkey 'select(.kind == "ConfigMap" and .metadata.name == "vault-config-app-a") | .data.VAULT_FROM_TEAM_A_TOOLS_PATH + " " + .data.VAULT_KV_SHARED_OUT_PATH' "$WORK/all.raw"
+[ "$fromkey" = "team-a/kv/data/dev/_shared/from-team-a-tools/ team-a/kv/data/dev/_shared/from-team-a-dev/" ] \
+  || { sr_ok=1; sr_detail="$sr_detail [app-a's shared ConfigMap keys: '$fromkey']"; }
+check subread "$sr_ok" "$sr_detail"
+
 # guards
 gd_ok=0; gd_detail=""
 for pair in \
@@ -412,7 +436,8 @@ for pair in \
   "g-transit:is not supported" "g-injection:is not a valid app name" "g-wildcard:is not a valid app name" \
   "g-reserved:is not a valid app name" "g-claimed:claimed by more than one" "g-claimer:claimed by more than one" \
   "default:cannot be granted Vault access" "g-unknown-key:unknown annotation" "g-bad-bool:must be" \
-  "g-app-only:no app identity is registered" "g.dotted:cannot be used with Vault"; do
+  "g-app-only:no app identity is registered" "g.dotted:cannot be used with Vault" \
+  "g-foreign-ns:is not a namespace of tenant" "g-orphan-sub:so it grants nothing"; do
   sa="${pair%%:*}"; msg="${pair#*:}"
   yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$sa.error\") | .data.ERROR" "$WORK/fx-guards.raw"
   grep -q -- "$msg" <<<"$err" \
@@ -422,7 +447,7 @@ for pair in \
     && { gd_ok=1; gd_detail="$gd_detail [$sa: a Policy rendered despite the error]"; }
 done
 # Positive controls in the other namespace.
-for sa in good-sa hostile-sa; do
+for sa in good-sa hostile-sa sub-ok; do
   yqs hit "select(.kind == \"Policy\" and .metadata.name == \"kv.team-a.team-a-prod.$sa\") | .metadata.name" "$WORK/fx-guards.raw"
   [ -n "$hit" ] \
     || { gd_ok=1; gd_detail="$gd_detail [$sa: correct SA rendered no Policy — one namespace's error froze another]"; }
@@ -431,8 +456,12 @@ done
 es_count() { local es; yqs es "select(.kind == \"ExternalSecret\" and .metadata.name == \"$1\") | .metadata.name" "$WORK/fx-guards.raw"; lines "$es"; }
 [ "$(es_count good-sa-db)" = 1 ] || { gd_ok=1; gd_detail="$gd_detail [identical asks were not deduped to ONE ExternalSecret]"; }
 [ "$(es_count good-sa-cfg)" = 0 ] || { gd_ok=1; gd_detail="$gd_detail [clashing asks rendered an ExternalSecret]"; }
+[ "$(es_count sub-ok-y)" = 1 ] || { gd_ok=1; gd_detail="$gd_detail [a granted subscription rendered no ExternalSecret]"; }
+[ "$(es_count good-sa-z)" = 1 ] || { gd_ok=1; gd_detail="$gd_detail [an own-namespace subscription rendered no ExternalSecret]"; }
+[ "$(es_count sub-missing-x)" = 0 ] || { gd_ok=1; gd_detail="$gd_detail [an ungranted subscription rendered an ExternalSecret]"; }
 for pair in "d-clash-a:ask for different secrets" "d-clash-b:ask for different secrets" "d-no-sa:requires spec.template.spec.serviceAccountName" \
   "d-misplaced:is read on the ServiceAccount" "d-ghost-sa:does not exist in namespace" "d-no-kv:needs KV access" \
+  "d-sub-nogrant:does not list it in" "d-sub-foreign:is not a namespace of tenant" \
   "d-unknown:unknown annotation" "d-evil-key:field selector" "d-evil-leaf:is not a valid secret reference" "d-evil-name:names the Kubernetes Secret"; do
   d="${pair%%:*}"; msg="${pair#*:}"
   yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$d.deploy-error\") | .data.ERROR" "$WORK/fx-guards.raw"

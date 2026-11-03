@@ -45,7 +45,7 @@ token:
   period: 1800
 
 serviceAccounts:
-  # Own-tenant grants with a named app.
+  # Own-tenant grants with a named app, and a subscription.
   - metadata:
       name: app-a
       namespace: team-a-dev
@@ -53,6 +53,7 @@ serviceAccounts:
         vault.stakater.com/kv: "true"
         vault.stakater.com/role: editor
         vault.stakater.com/app: payments
+        vault.stakater.com/kv-subscribe-ns: team-a-tools
   # Second role + second namespace.
   - metadata:
       name: app-b
@@ -67,13 +68,14 @@ serviceAccounts:
       annotations:
         vault.stakater.com/kv: "true"
         vault.stakater.com/role: viewer
-  # audit-read role: the metadata-list-only branch.
+  # audit-read role with a subscription: the metadata-list-only branch.
   - metadata:
       name: app-d
       namespace: team-a-tools
       annotations:
         vault.stakater.com/kv: "true"
         vault.stakater.com/role: audit-read
+        vault.stakater.com/kv-subscribe-ns: team-a-dev
   # No vault annotation at all → nothing rendered, no error.
   - metadata:
       name: plain-sa
@@ -87,6 +89,7 @@ deployments:
       annotations:
         vault.stakater.com/kv-secret.web-db: "db-creds#password"
         vault.stakater.com/kv-secret.web-cfg: "app-config"
+        vault.stakater.com/kv-subscribe.tools-shared: "team-a-tools/shared-item"
     spec:
       template:
         spec:
