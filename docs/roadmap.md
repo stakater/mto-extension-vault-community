@@ -80,7 +80,7 @@ namespace name refused. Satisfies **AC-ISO-1..5**, **AC-ISO-10**,
 **AC-ACC-1..4**. Planning:
 [`planning/C2-workload-access-scope-check.md`](planning/C2-workload-access-scope-check.md).
 
-**Story C.3 — VCO can't widen itself** 👍 *Approved*
+**Story C.3 — VCO can't widen itself** ✅ *Done*
 
 As a security owner, I want the operator that writes tenant policies unable to
 touch its own policy, the platform's policies or any mount's data, so that the
@@ -93,7 +93,8 @@ the wrong type and a mount delete; a `kv.*` Policy granting outside its tenant
 refused at admission; a tenant's Template refused writing into
 `vault-config`; the render never emits a policy name outside the three
 families. Satisfies **AC-ISO-7**, **AC-ISO-11**, **AC-ISO-12**,
-**AC-LIFE-4**.
+**AC-LIFE-4**. Planning:
+[`planning/C3-vco-cant-widen-itself.md`](planning/C3-vco-cant-widen-itself.md).
 
 **Story C.4 — Delivery through External Secrets Operator** 👍 *Approved*
 

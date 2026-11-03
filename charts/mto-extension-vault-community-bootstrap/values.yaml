@@ -128,3 +128,11 @@ sync:
   # Field paths exempt from drift enforcement. VCO adds its own finalizer to
   # every CR it reconciles, so strict needs at least metadata.finalizers.
   ignoreFields: []
+
+# The scope check at the API server: three ValidatingAdmissionPolicies on the
+# VCO CRs in configNamespace (templates/50-admission.yaml). They are the wall
+# between tenants that Vault Community does not have: VCO's own policy bounds
+# names and mount types, not what a policy grants. Needs Kubernetes 1.30.
+# Turn off ONLY on an older cluster, knowing that it removes the wall.
+admission:
+  enabled: true

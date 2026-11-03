@@ -154,6 +154,14 @@
         }
       },
       "additionalProperties": false
+    },
+    "admission": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "$ref": "#/definitions/boolish"
+        }
+      }
     }
   }
 }

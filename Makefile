@@ -456,3 +456,7 @@ e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
 	-$(KC) -n reloader logs deploy/reloader-reloader --tail=2000 > e2e-logs/reloader.log 2>&1
 	-$(KC) -n $(VAULT_NS) logs vault-0 --tail=2000 > e2e-logs/vault.log 2>&1
 	@echo "diagnostics in ./e2e-logs"
+
+.PHONY: admission-test
+admission-test: ## Run the admission-policy cases against the lab (server-side dry runs; needs lab-bootstrap).
+	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) CONFIG_NS=$(CONFIG_NS) ./hack/lab/admission-cases.sh

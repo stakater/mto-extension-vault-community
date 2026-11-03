@@ -89,6 +89,16 @@
 #                  Unset, VCO's finalizer update sends "" and its CRD enum refuses
 #                  it: the CR gets no finalizer, and deleting it never deletes the
 #                  mount in Vault.
+#   admission    — the bootstrap renders the three admission policies and their
+#                  bindings, with the install's values in their CEL: Template
+#                  Operator's ServiceAccount, the config namespace, the tenant
+#                  label, the API host, the issuer, the group pattern and the
+#                  reserved names; admission.enabled=false renders none, and a
+#                  near-miss value fails.
+#   vcopolicy    — charts/examples/vco-admin-policy.hcl (production) and the lab
+#                  policy differ only by delete on the kv mounts; neither grants
+#                  a wildcard over sys/policy, sys/mounts, sys/auth or auth, nor
+#                  VCO's own login mount or policy; every mount pins its type.
 #   release      — hack/release-chart.sh, against a stub helm: a published
 #                  version is skipped (no push), an explicit not-found is
 #                  pushed, anything else fails without pushing.
@@ -863,6 +873,77 @@ for c in "tenant:$WORK/all.raw:1" "parent:$WORK/emit-enabled.yaml:5"; do
   [ -z "$lvbad" ] || { lv_ok=1; lv_detail="$lv_detail [$name: mounts without a valid listingVisibility: $(tr '\n' ' ' <<<"$lvbad")]"; }
 done
 check listingvis "$lv_ok" "$lv_detail"
+
+# admission
+ad_ok=0; ad_detail=""
+yqs vaps 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$WORK/boot-default.yaml"
+yqs vapbs 'select(.kind == "ValidatingAdmissionPolicyBinding") | .metadata.name + "=" + .spec.policyName + "=" + (.spec.validationActions | join(","))' "$WORK/boot-default.yaml"
+for p in origin scope cluster; do
+  grep -qx "$P-vco-$p" <<<"$vaps" || { ad_ok=1; ad_detail="$ad_detail [no admission policy $P-vco-$p]"; }
+  grep -qx "$P-vco-$p=$P-vco-$p=Deny" <<<"$vapbs" || { ad_ok=1; ad_detail="$ad_detail [no Deny binding for $P-vco-$p]"; }
+done
+yqs fp 'select(.kind == "ValidatingAdmissionPolicy") | .spec.failurePolicy' "$WORK/boot-default.yaml"
+[ "$(sort -u <<<"$fp")" = Fail ] || { ad_ok=1; ad_detail="$ad_detail [failurePolicy is not Fail everywhere: $(sort -u <<<"$fp" | tr '\n' ' ')]"; }
+cat > "$WORK/ad.yaml" <<'YAML'
+configNamespace: cfg-x
+templateOperator: { namespace: tov-ns, serviceAccountName: tov-sa }
+kubernetesAuth: { kubernetesHost: "https://api.example.com:6443", tokenReviewerServiceAccount: rev-sa }
+parent:
+  tenantLabelKey: example.com/tenant
+  sso: { enabled: true, issuerUrl: "https://idp.example.com/realms/x" }
+  reservedPaths: [platform-x]
+tenantValues:
+  sso:
+    tenantGroupTemplate: "grp-{tenant}-{role}"
+    tenantRoleMapping: { admin: { pattern: "ops-{tenant}" } }
+YAML
+"$HELM" template b "$BOOTSTRAP" -n cfg-x -f "$WORK/ad.yaml" > "$WORK/ad.out" 2>"$WORK/ad.err" \
+  || { ad_ok=1; ad_detail="$ad_detail [bootstrap with other values failed: $(first "$WORK/ad.err")]"; }
+yqs adcel 'select(.kind == "ValidatingAdmissionPolicy") | .. | select(tag == "!!str")' "$WORK/ad.out"
+for want in "system:serviceaccount:tov-ns:tov-sa" "'example.com/tenant': variables.t" "https://api.example.com:6443" \
+  "https://idp.example.com/realms/x" "'admin': 'ops-{tenant}'" "'editor': 'grp-{tenant}-{role}'" "'platform-x'" "'rev-sa'"; do
+  grep -qF -- "$want" <<<"$adcel" || { ad_ok=1; ad_detail="$ad_detail [the admission policies do not carry '$want']"; }
+done
+yqs adns 'select(.kind == "ValidatingAdmissionPolicy") | .spec.matchConstraints.namespaceSelector.matchLabels."kubernetes.io/metadata.name"' "$WORK/ad.out"
+[ "$(sort -u <<<"$adns")" = cfg-x ] || { ad_ok=1; ad_detail="$ad_detail [the admission policies match namespace '$(sort -u <<<"$adns" | tr '\n' ' ')', want cfg-x]"; }
+yqs adparam 'select(.kind == "ValidatingAdmissionPolicyBinding" and .spec.paramRef != null) | .spec.paramRef.namespace + "/" + .spec.paramRef.name' "$WORK/ad.out"
+[ "$adparam" = cfg-x/kube-root-ca.crt ] || { ad_ok=1; ad_detail="$ad_detail [the cluster binding reads '$adparam', want cfg-x/kube-root-ca.crt]"; }
+"$HELM" template b "$BOOTSTRAP" -n "$NS" --set admission.enabled=false > "$WORK/ad-off.yaml" 2>"$WORK/ad.err" \
+  || { ad_ok=1; ad_detail="$ad_detail [admission.enabled=false failed: $(first "$WORK/ad.err")]"; }
+yqs adoff 'select(.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAdmissionPolicyBinding") | .metadata.name' "$WORK/ad-off.yaml"
+[ -z "$adoff" ] || { ad_ok=1; ad_detail="$ad_detail [admission.enabled=false still renders: $(tr '\n' ' ' <<<"$adoff")]"; }
+if "$HELM" template b "$WORK/noschema/boot" -n "$NS" --set-string admission.enabled=yes > /dev/null 2>"$WORK/ad.err"; then
+  ad_ok=1; ad_detail="$ad_detail [admission.enabled=yes accepted]"
+fi
+if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set "parent.sso.enabled=true" --set "parent.sso.issuerUrl=https://idp/x'y" > /dev/null 2>"$WORK/ad.err"; then
+  ad_ok=1; ad_detail="$ad_detail [an issuer with a quote was embedded in CEL]"
+else
+  grep -q 'contains a quote or a backslash' "$WORK/ad.err" || { ad_ok=1; ad_detail="$ad_detail [a quoted issuer failed elsewhere: $(first "$WORK/ad.err")]"; }
+fi
+check admission "$ad_ok" "$ad_detail"
+
+# vcopolicy
+vp_ok=0; vp_detail=""
+PROD="$REPO_ROOT/charts/examples/vco-admin-policy.hcl"; LAB="$REPO_ROOT/hack/lab/vco-admin-policy.hcl"
+stanzas() { sed -e 's/#.*//' -e 's/[[:space:]]*$//' "$1" | grep -v '^$'; }
+d="$(diff <(stanzas "$PROD") <(stanzas "$LAB") | grep -E '^[<>]' || true)"
+want_d='<   capabilities = ["create", "read", "update"]
+>   capabilities = ["create", "read", "update", "delete"]'
+[ "$d" = "$want_d" ] || { vp_ok=1; vp_detail="$vp_detail [production and lab policies differ by more than the kv delete: $(tr '\n' '|' <<<"$d")]"; }
+stanzas "$PROD" | grep -A1 '^path "sys/mounts/+/kv" {$' | grep -qx '  capabilities = \["create", "read", "update"\]' \
+  || { vp_ok=1; vp_detail="$vp_detail [the production kv mount grant is not create, read, update]"; }
+for f in "$PROD" "$LAB"; do
+  paths="$(grep -oE '^path "[^"]+"' "$f" | sed -e 's/^path "//' -e 's/"$//')"
+  [ "$(lines "$paths")" -ge 15 ] || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f"): only $(lines "$paths") paths — the check proves nothing]"; }
+  bad="$(grep -E '^(sys/policy/\*|sys/mounts/\*|sys/auth/\*|auth/\*|auth/kubernetes/|auth/token|sys/policy/vco-admin|sys/policy/default|\*)' <<<"$paths" || true)"
+  [ -z "$bad" ] || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f") grants $(tr '\n' ' ' <<<"$bad")]"; }
+  grep -q 'sudo' <(grep -A2 -E '^path "(sys/policy|auth/)' "$f") && { vp_ok=1; vp_detail="$vp_detail [$(basename "$f") gives sudo on a policy or role path]"; }
+  for m in 'sys/mounts/+/kv:kv' 'sys/auth/+/kubernetes/workloads:kubernetes' 'sys/auth/+/oidc/sso:oidc'; do
+    block="$(awk -v p="path \"${m%%:*}\" {" '$0 == p {on=1} on {print} on && /^}/ {exit}' "$f")"
+    grep -q "\"type\" = \[\"${m##*:}\"\]" <<<"$block" || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f"): ${m%%:*} does not pin type ${m##*:}]"; }
+  done
+done
+check vcopolicy "$vp_ok" "$vp_detail"
 
 # release
 rl_ok=0; rl_detail=""

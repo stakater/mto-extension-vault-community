@@ -80,6 +80,60 @@ name is:
   `userpass`, `approle`, `ldap`). The parent can't read Vault's mount tables,
   so add any other mount your platform has.
 
+## Vault bootstrap (one time, by a Vault admin)
+
+VCO logs in to Vault with the Kubernetes auth method as the ServiceAccount the
+bootstrap chart creates. Before the bootstrap chart can do anything, a Vault
+admin sets up that login:
+
+```bash
+vault auth enable kubernetes
+vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc:443
+vault policy write vco-admin examples/vco-admin-policy.hcl
+vault write auth/kubernetes/role/vco-admin \
+  bound_service_account_names=vco-admin \
+  bound_service_account_namespaces=vault-config \
+  token_policies=vco-admin token_ttl=1h
+```
+
+`kubernetes_host` without `token_reviewer_jwt`: Vault then reviews tokens with
+its own ServiceAccount, which must be bound to `system:auth-delegator` (the
+HashiCorp Helm chart does this by default). No reviewer credential is stored.
+
+The first segment of VCO's login mount (`kubernetes` here) becomes a reserved
+tenant name: Vault refuses an auth mount nested under another, and every
+tenant's auth mounts start with the tenant's name.
+
+[examples/vco-admin-policy.hcl](examples/vco-admin-policy.hcl) is the
+production policy. It is narrowed **by name and by mount type**: policies only
+in the `kv.`, `share.` and `sso.` families, roles only on the extension's
+mounts and never on VCO's own `auth/kubernetes`, kv mounts without `delete`
+(deleting a tenant keeps its data, ADR-0005), and every mount's type pinned. The lab uses the
+same policy plus `delete` on the kv mounts, so its e2e teardown can finish.
+
+**VCO's token is root-equivalent all the same.** Vault Community has no
+namespace to contain what a `kv.*` policy grants, so VCO's own policy bounds
+names, not content. Nobody but VCO may create tokens for
+`vault-config/vco-admin` or exec into VCO's pod; its login role binds
+`vault-config` only. What VCO is asked is bounded by the admission policies
+below.
+
+## Admission policies
+
+The bootstrap chart installs three ValidatingAdmissionPolicies on the VCO CRs
+in `configNamespace` (Kubernetes 1.30 or later). They are the wall between
+tenants that Vault Community does not have, and they hold for every writer of
+`configNamespace` — the charts, Template Operator, a person:
+
+| Policy | Refuses |
+|---|---|
+| `mto-extension-vault-community-vco-origin` | a VCO CR that Template Operator writes for a TemplateInstance outside `configNamespace`. A Template in a tenant namespace can name `configNamespace`, and Template Operator applies it with its own rights. |
+| `mto-extension-vault-community-vco-scope` | a policy, role or mount outside its tenant's scope: a name outside the `kv.`, `share.` and `sso.` families, a policy line that is not a one-line `path` stanza or grants `sudo`, a path outside `<tenant>/kv/…` (or its share in `shared/kv/…`), a role not bound to exactly its own policy, its tenant's mount, its ServiceAccount and its namespace by name and tenant label, an SSO role not bound to exactly its tenant's group, a mount of another shape or at a reserved name, an OIDC config at another issuer. |
+| `mto-extension-vault-community-vco-cluster` | a Kubernetes auth config for another API or another CA than this cluster's `kube-root-ca.crt`. |
+
+Each has failure policy `Fail`. A deletion is never refused. `admission.enabled`
+exists only for clusters older than 1.30; turning it off removes the wall.
+
 ## Install
 
 ```bash

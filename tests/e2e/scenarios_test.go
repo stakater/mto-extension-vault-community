@@ -1,9 +1,11 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -463,14 +465,23 @@ func TestE2E(t *testing.T) {
 	})
 
 	step("vco: a role cannot move to another tenant's mount", func(t *testing.T) {
-		// VCO's webhook refuses to change a CR's spec.path: the object would stay
-		// behind at the old path (V11). Checked on web's role: the move would
-		// put it on e2e-beta's auth mount.
+		// Two layers refuse to put web's role on e2e-beta's auth mount: the
+		// scope admission policy (a role lives on its own tenant's mount), and
+		// VCO's webhook, which refuses any change of spec.path because the
+		// object would stay behind at the old path (V11). The admission policy
+		// answers first when it is installed.
 		name := roleName(alpha, alphaNS, "web")
 		move := []byte(`{"spec":{"path":"` + k8sAuthMount(beta) + `"}}`)
 		_, err := dyn.Resource(vcoGVR("kubernetesauthengineroles")).Namespace(configNS).Patch(ctx, name, types.MergePatchType, move, metav1.PatchOptions{})
-		if err == nil || !strings.Contains(err.Error(), "cannot be updated") {
-			t.Errorf("moving a role to another tenant's mount was not refused by VCO's webhook: %v", err)
+		switch {
+		case err == nil:
+			t.Errorf("web's role moved to e2e-beta's mount")
+		case strings.Contains(err.Error(), "vco-scope"):
+			t.Logf("refused by the scope admission policy")
+		case strings.Contains(err.Error(), "cannot be updated"):
+			t.Logf("refused by VCO's webhook")
+		default:
+			t.Errorf("moving a role to another tenant's mount was refused for an unexpected reason: %v", err)
 		}
 		// The matching allow: an update that keeps the path passes the same webhook.
 		keep := []byte(`{"metadata":{"annotations":{"e2e.stakater.com/touched":"true"}}}`)
@@ -502,6 +513,124 @@ func TestE2E(t *testing.T) {
 		if _, err := kvGet(t, auditToken, alpha, appPath(alphaNS, "auditor", "item"), "v"); !refused(err) {
 			t.Errorf("audit-read read secret data; err: %v", err)
 		}
+	})
+
+	step("vco: the production policy can't widen VCO or delete data", func(t *testing.T) {
+		// AC-ISO-7, AC-LIFE-4. The production policy (charts/examples), loaded
+		// under a check name, in a token that holds only it. Each refusal has
+		// its allow: the same kind of call inside the policy's bounds.
+		raw, err := os.ReadFile("../../charts/examples/vco-admin-policy.hcl")
+		if err != nil {
+			t.Fatal(err)
+		}
+		const pol, scratch = "e2e-vco-production", "e2e-vco"
+		vaultRoot(t, "write", "sys/policy/"+pol, "policy="+string(raw))
+		t.Cleanup(func() {
+			vaultRun(t, vaultRootToken, "secrets", "disable", kvMount(scratch))
+			vaultRun(t, vaultRootToken, "auth", "disable", k8sAuthMount(scratch))
+			vaultRun(t, vaultRootToken, "delete", "sys/policy/kv."+scratch+".ns.sa")
+			vaultRun(t, vaultRootToken, "delete", "sys/policy/"+pol)
+		})
+		tok := strings.TrimSpace(vaultRoot(t, "token", "create", "-policy="+pol, "-no-default-policy", "-ttl=10m", "-field=token"))
+		inScope := `path "` + kvMount(scratch) + `/data/dev/ns/sa/*" { capabilities = ["read"] }`
+		cases := []struct {
+			what  string
+			allow bool
+			args  []string
+		}{
+			{"write a kv.* policy", true, []string{"write", "sys/policy/kv." + scratch + ".ns.sa", "policy=" + inScope}},
+			{"rewrite its own policy", false, []string{"write", "sys/policy/vco-admin", "policy=" + inScope}},
+			{"rewrite the default policy", false, []string{"write", "sys/policy/default", "policy=" + inScope}},
+			{"write a policy outside the families", false, []string{"write", "sys/policy/platform-x", "policy=" + inScope}},
+			{"mount a transit engine at a tenant's kv place", false, []string{"secrets", "enable", "-path=" + kvMount(scratch), "transit"}},
+			{"mount a kv engine at a tenant's kv place", true, []string{"secrets", "enable", "-path=" + kvMount(scratch), "-version=2", "kv"}},
+			{"disable a tenant's kv mount", false, []string{"secrets", "disable", kvMount(scratch)}},
+			{"mount userpass at a tenant's workload auth place", false, []string{"auth", "enable", "-path=" + k8sAuthMount(scratch), "userpass"}},
+			{"mount kubernetes at a tenant's workload auth place", true, []string{"auth", "enable", "-path=" + k8sAuthMount(scratch), "kubernetes"}},
+			{"write a role on its own login mount", false, []string{"write", "auth/" + vcoLoginMount + "/role/kv." + scratch + ".ns.sa", "bound_service_account_names=sa", "bound_service_account_namespaces=ns", "policies=kv." + scratch + ".ns.sa"}},
+			{"rewrite its own login role", false, []string{"write", "auth/" + vcoLoginMount + "/role/" + vcoLogin, "bound_service_account_names=*", "bound_service_account_namespaces=*"}},
+			{"disable a tenant's workload auth mount", true, []string{"auth", "disable", k8sAuthMount(scratch)}},
+		}
+		for _, c := range cases {
+			_, err := vaultRun(t, tok, c.args...)
+			switch {
+			case c.allow && err != nil:
+				t.Errorf("the production policy refused VCO to %s (the matching allow): %v", c.what, err)
+			case !c.allow && !refused(err):
+				t.Errorf("the production policy let VCO %s; err: %v", c.what, err)
+			}
+		}
+	})
+
+	step("admission: out-of-scope VCO CRs are refused at the API server", func(t *testing.T) {
+		// AC-ISO-11. The same cases make admission-test runs: server-side dry
+		// runs in the config namespace, each refusal one field away from an
+		// admitted object.
+		cctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(cctx, "bash", "../../hack/lab/admission-cases.sh")
+		cmd.Env = append(os.Environ(), "CONTEXT="+kubeContext, "CONFIG_NS="+configNS, "KUBECTL="+kubectlBin())
+		raw, err := cmd.CombinedOutput()
+		out := string(raw)
+		if err != nil {
+			t.Fatalf("admission cases: %v\n%s", err, out)
+		}
+		if !strings.Contains(out, "== result: 0 failed") {
+			t.Fatalf("admission cases:\n%s", out)
+		}
+		t.Logf("%d admission cases passed", strings.Count(out, "PASS "))
+	})
+
+	step("admission: a tenant's Template can't make Template Operator write into the config namespace", func(t *testing.T) {
+		// AC-ISO-12 (T2, Q18b). A Template's targetNamespaces gates where its
+		// TemplateInstance lives, not where the objects it renders go, and
+		// Template Operator applies them with its own rights — which include
+		// writing VCO CRs in the config namespace. The origin policy refuses a
+		// VCO CR whose TemplateInstance is anywhere else. The matching allow is
+		// every Policy the extension's own TemplateInstances rendered above.
+		deputy := roleName(alpha, alphaNS, "deputy")
+		manifest := fmt.Sprintf(`apiVersion: templates.v2.stakater.com/v2alpha1
+kind: Template
+metadata: { name: deputy, namespace: %[1]s }
+spec:
+  targetNamespaces: { explicit: { allow: { literal: [%[1]s] } } }
+  gotemplate: |
+    apiVersion: redhatcop.redhat.io/v1alpha1
+    kind: Policy
+    metadata: { name: %[2]s, namespace: %[3]s }
+    spec:
+      authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+      name: %[2]s
+      policy: |
+        path "%[4]s/data/dev/%[1]s/deputy/*" { capabilities = ["read"] }
+---
+apiVersion: templates.v2.stakater.com/v2alpha1
+kind: TemplateInstance
+metadata: { name: deputy, namespace: %[1]s }
+spec:
+  templateRef: { name: deputy, namespace: %[1]s }
+`, alphaNS, deputy, configNS, kvMount(alpha))
+		applyManifest(t, manifest)
+		t.Cleanup(func() {
+			run(t, kubectlBin(), "--context", kubeContext, "-n", alphaNS, "delete", "templateinstances.templates.v2.stakater.com", "deputy", "--ignore-not-found", "--wait=true")
+			run(t, kubectlBin(), "--context", kubeContext, "-n", alphaNS, "delete", "templates.templates.v2.stakater.com", "deputy", "--ignore-not-found")
+		})
+		waitFor(t, "the deputy TemplateInstance reports the admission refusal", func() string {
+			o := get(t, gvrTemplateInstance, alphaNS, "deputy")
+			if o == nil {
+				return "absent"
+			}
+			if _, msg := condition(o, "Applied"); !strings.Contains(msg, "vco-origin") {
+				return "Applied: " + msg
+			}
+			return ""
+		})
+		holdFor(t, 10*time.Second, "no Policy written for the tenant Template", func() string {
+			if get(t, vcoGVR("policies"), configNS, deputy) != nil {
+				return "Policy " + deputy + " exists in " + configNS
+			}
+			return ""
+		})
 	})
 
 	step("configmap: vault-config-<sa> describes a working login", func(t *testing.T) {

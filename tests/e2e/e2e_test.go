@@ -51,6 +51,11 @@
 //
 //   - the app's own data path widened to its namespace, with the render-time
 //     scope check removed: web's read of a sibling app's secret (C.2)
+//   - the scope admission policy without its sudo rule, and without the tenant
+//     label in the role selector rule: the cases "sudo on its own path" and
+//     "a namespace bound with another tenant's label" (hack/lab/admission-cases.sh, C.3)
+//   - the admission policies off: the tenant Template's Policy is written into
+//     the config namespace (the origin step's hold fails, C.3)
 package e2e
 
 import (
@@ -267,6 +272,19 @@ func releaseExists(t *testing.T) bool {
 	defer cancel()
 	cmd := exec.CommandContext(cctx, helmBin(), "status", releaseName, "--kube-context", kubeContext, "-n", configNS)
 	return cmd.Run() == nil
+}
+
+// applyManifest applies YAML with kubectl, server-side, as the suite's own
+// (cluster-admin) identity.
+func applyManifest(t *testing.T, manifest string) {
+	t.Helper()
+	cctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, kubectlBin(), "--context", kubeContext, "apply", "--server-side", "-f", "-")
+	cmd.Stdin = strings.NewReader(manifest)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("kubectl apply: %v\n%s", err, out)
+	}
 }
 
 func run(t *testing.T, bin string, args ...string) string {
