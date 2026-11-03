@@ -32,6 +32,9 @@
 //	                       and checks that VCO's Deployment really runs with it
 //	E2E_VCO_NAMESPACE, E2E_VCO_DEPLOYMENT
 //	                       where VCO runs; defaults match the lab
+//	E2E_DEX_ISSUER, E2E_KEYCLOAK_URL, E2E_DEX_NAMESPACE, E2E_KEYCLOAK_NAMESPACE
+//	                       where Dex and Keycloak run; defaults match the lab
+//	E2E_UI_CALLBACK        the Vault UI's SSO callback, with {tenant}
 //	E2E_KEEP=1             skip the final uninstall, to inspect the cluster afterwards
 //	E2E_KEEP_ON_FAILURE=1  skip the uninstall only when the run failed, so a
 //	                       diagnostics dump after go test still sees the failed
@@ -116,6 +119,11 @@ var (
 	vcoSync      time.Duration
 	vcoNS        string
 	vcoDeploy    string
+	dexIssuer    string
+	keycloakURL  string
+	dexNS        string
+	keycloakNS   string
+	uiCallback   string
 
 	dyn  dynamic.Interface
 	kube kubernetes.Interface
@@ -159,6 +167,11 @@ func TestMain(m *testing.M) {
 	tov2SA = os.Getenv("E2E_TOV2_SA")
 	vcoNS = envOr("E2E_VCO_NAMESPACE", "vault-config-operator")
 	vcoDeploy = envOr("E2E_VCO_DEPLOYMENT", "vault-config-operator")
+	dexNS = envOr("E2E_DEX_NAMESPACE", "dex")
+	keycloakNS = envOr("E2E_KEYCLOAK_NAMESPACE", "keycloak")
+	dexIssuer = envOr("E2E_DEX_ISSUER", "http://dex.dex.svc.cluster.local:5556")
+	keycloakURL = envOr("E2E_KEYCLOAK_URL", "http://keycloak.keycloak.svc.cluster.local:8080")
+	uiCallback = envOr("E2E_UI_CALLBACK", "http://vault.vault.svc:8200/ui/vault/auth/{tenant}/oidc/sso/oidc/callback")
 	var err error
 	if waitTimeout, err = time.ParseDuration(envOr("E2E_WAIT_TIMEOUT", "4m")); err != nil {
 		println("E2E_WAIT_TIMEOUT:", err.Error())
@@ -225,6 +238,14 @@ func helmInstall(t *testing.T) {
 		"--set", "parent.vaultServer=" + vaultServer,
 		"--set", "parent.eso=enabled",
 		"--set", "parent.externalSecretRefreshInterval=" + esoRefresh,
+		// SSO through the lab's Dex; the client secret is copied into configNS
+		// by copyOIDCClientSecret before this install.
+		"--set", "parent.sso.enabled=true",
+		"--set", "parent.sso.issuerUrl=" + dexIssuer,
+		// The CLI's callback (sso.go), and the Vault UI's with {tenant}: each
+		// tenant's mount has its own. The preflight checks that Dex allows them.
+		"--set", "parent.sso.allowedRedirectUris[0]=" + cliCallback,
+		"--set", "parent.sso.allowedRedirectUris[1]=" + uiCallback,
 	}
 	if tov2SA != "" {
 		parts := strings.Split(strings.TrimPrefix(tov2SA, "system:serviceaccount:"), ":")

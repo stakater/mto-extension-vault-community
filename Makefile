@@ -237,7 +237,7 @@ define wait-crd
 endef
 
 .PHONY: lab-up
-lab-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-vco lab-chart-repo lab-bootstrap lab-vault-bootstrap ## Build the whole lab.
+lab-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-keycloak lab-dex lab-vco lab-chart-repo lab-bootstrap lab-vault-bootstrap ## Build the whole lab.
 
 .PHONY: lab-down
 lab-down: ## Delete the lab cluster.
@@ -387,7 +387,14 @@ lab-bootstrap: helm ## Install the bootstrap chart from this checkout, pulling t
 		--set templateOperator.namespace=$(TOV2_NS) \
 		--set tenantChart.registry=$(CHART_REPO_URL) \
 		--set parent.vaultServer=http://vault.$(VAULT_NS).svc:8200 \
-		--set parent.eso=enabled
+		--set parent.eso=enabled \
+		--set parent.sso.enabled=true --set parent.sso.issuerUrl=$(DEX_ISSUER) \
+		--set 'parent.sso.allowedRedirectUris[0]=$(CLI_CALLBACK)' \
+		--set 'parent.sso.allowedRedirectUris[1]=$(UI_CALLBACK)'
+	@# Vault's side of the Dex "vault" client: the same secret, in CONFIG_NS.
+	@$(KC) -n $(DEX_NS) get secret dex-vault-client -o json \
+		| jq '{apiVersion: "v1", kind: "Secret", type: "Opaque", metadata: {name: "vault-oidc-client-secret", namespace: "$(CONFIG_NS)"}, data: {"client-secret": .data["client-secret"]}}' \
+		| $(KC) apply -f -
 
 .PHONY: lab-uninstall
 lab-uninstall: helm ## Uninstall the bootstrap chart in the documented order (charts/README.md → Uninstall).
@@ -411,6 +418,82 @@ lab-uninstall: helm ## Uninstall the bootstrap chart in the documented order (ch
 lab-render: ## Apply the sample Tenants, their labelled namespaces and annotated ServiceAccounts.
 	$(KC) apply -f hack/lab/sample-tenants.yaml
 
+# SSO, as in production: person -> Vault -> Dex -> Keycloak. The namespaces and
+# URLs are fixed: hack/lab/keycloak*.yaml name them too.
+KEYCLOAK_NS  := keycloak
+DEX_NS       := dex
+KEYCLOAK_URL := http://keycloak.$(KEYCLOAK_NS).svc.cluster.local:8080
+DEX_ISSUER   := http://dex.$(DEX_NS).svc.cluster.local:5556
+# The lab Keycloak's test users: hack/lab/keycloak-setup-job.yaml puts each in a group.
+KEYCLOAK_TEST_USERS := alice bob carol dave erin
+DEX_CHART_VERSION ?= 0.25.2
+# Each tenant's SSO mount has its own UI callback, and Dex allows no wildcard
+# in a redirect URI, so its "vault" client lists one per tenant: these, plus
+# the CLI's loopback callback that every mount shares.
+DEX_TENANTS ?= e2e-alpha e2e-beta team-a team-b
+CLI_CALLBACK := http://localhost:8250/oidc/callback
+UI_CALLBACK  := http://vault.$(VAULT_NS).svc:8200/ui/vault/auth/{tenant}/oidc/sso/oidc/callback
+
+.PHONY: lab-keycloak
+lab-keycloak: ## Install Keycloak: realm mto, client dex, a group per tenant and role, five test users.
+	$(KC) create namespace $(KEYCLOAK_NS) --dry-run=client -o yaml | $(KC) apply -f -
+	@# Random secrets, made only when missing: a re-run must not change a password
+	@# that Keycloak, Dex or a running test already holds. Never printed.
+	@$(KC) -n $(KEYCLOAK_NS) get secret keycloak-admin >/dev/null 2>&1 \
+		|| $(KC) -n $(KEYCLOAK_NS) create secret generic keycloak-admin \
+			--from-literal=username=admin --from-literal=password="$$(openssl rand -hex 16)"
+	@$(KC) -n $(KEYCLOAK_NS) get secret keycloak-dex-client >/dev/null 2>&1 \
+		|| $(KC) -n $(KEYCLOAK_NS) create secret generic keycloak-dex-client \
+			--from-literal=client-secret="$$(openssl rand -hex 24)"
+	@$(KC) -n $(KEYCLOAK_NS) get secret keycloak-test-users >/dev/null 2>&1 \
+		|| $(KC) -n $(KEYCLOAK_NS) create secret generic keycloak-test-users >/dev/null
+	@for u in $(KEYCLOAK_TEST_USERS); do \
+		have=$$($(KC) -n $(KEYCLOAK_NS) get secret keycloak-test-users -o jsonpath="{.data.$$u}") || exit 1; \
+		[ -n "$$have" ] || $(KC) -n $(KEYCLOAK_NS) patch secret keycloak-test-users --type merge \
+			-p "{\"stringData\":{\"$$u\":\"$$(openssl rand -hex 8)\"}}" >/dev/null || exit 1; \
+	done
+	$(KC) apply -f hack/lab/keycloak.yaml
+	$(KC) -n $(KEYCLOAK_NS) rollout status deploy/keycloak --timeout=300s
+	@# Dev mode keeps the realm in memory, so the setup runs on every call.
+	$(KC) -n $(KEYCLOAK_NS) delete job keycloak-setup --ignore-not-found --wait=true
+	$(KC) apply -f hack/lab/keycloak-setup-job.yaml
+	$(KC) -n $(KEYCLOAK_NS) wait --for=condition=Complete job/keycloak-setup --timeout=300s
+
+.PHONY: lab-dex
+lab-dex: helm ## Install Dex, connected to the lab Keycloak; its config is built from Secrets, never printed.
+	$(KC) create namespace $(DEX_NS) --dry-run=client -o yaml | $(KC) apply -f -
+	@$(KC) -n $(DEX_NS) get secret dex-vault-client >/dev/null 2>&1 \
+		|| $(KC) -n $(DEX_NS) create secret generic dex-vault-client \
+			--from-literal=client-secret="$$(openssl rand -hex 24)"
+	@# The config as JSON (a subset of YAML, which Dex reads), with both client
+	@# secrets read from their Secrets inside jq: none passes through the shell.
+	@kc_secret=$$($(KC) -n $(KEYCLOAK_NS) get secret keycloak-dex-client -o json) || exit 1; \
+	vault_secret=$$($(KC) -n $(DEX_NS) get secret dex-vault-client -o json) || exit 1; \
+	jq -n --argjson kc "$$kc_secret" --argjson vc "$$vault_secret" \
+		--arg issuer "$(DEX_ISSUER)" --arg kcurl "$(KEYCLOAK_URL)" --arg cli "$(CLI_CALLBACK)" \
+		--arg ui "$(UI_CALLBACK)" --arg tenants "$(DEX_TENANTS)" --arg ns "$(DEX_NS)" \
+		'{apiVersion: "v1", kind: "Secret", type: "Opaque", metadata: {name: "dex-config", namespace: $$ns}, \
+		  stringData: {"config.yaml": ({issuer: $$issuer, storage: {type: "memory"}, web: {http: "0.0.0.0:5556"}, \
+		    oauth2: {skipApprovalScreen: true}, \
+		    connectors: [{type: "oidc", id: "keycloak", name: "Keycloak", config: {issuer: ($$kcurl + "/realms/mto"), \
+		      clientID: "dex", clientSecret: ($$kc.data["client-secret"] | @base64d), redirectURI: ($$issuer + "/callback"), \
+		      scopes: ["openid", "profile", "email"], insecureEnableGroups: true}}], \
+		    staticClients: [{id: "vault", name: "Vault", secret: ($$vc.data["client-secret"] | @base64d), \
+		      redirectURIs: ([$$cli] + ($$tenants | split(" ") | map(select(. != "")) | map(. as $$t | $$ui | sub("\\{tenant\\}"; $$t))))}]} | tojson)}}' \
+		| $(KC) apply -f - >/dev/null
+	$(HELM) repo add dex https://charts.dexidp.io --force-update >/dev/null
+	$(HELM) upgrade --install dex dex/dex --version $(DEX_CHART_VERSION) \
+		--kube-context $(CONTEXT) -n $(DEX_NS) -f hack/lab/dex-values.yaml --wait --timeout 5m
+	@# A new config reaches Dex only on a restart.
+	$(KC) -n $(DEX_NS) rollout restart deploy/dex
+	$(KC) -n $(DEX_NS) rollout status deploy/dex --timeout=300s
+	@# Vault fetches the issuer's discovery document from inside its pod: prove it works there.
+	@doc=$$($(KC) -n $(VAULT_NS) exec vault-0 -- wget -qO- $(DEX_ISSUER)/.well-known/openid-configuration) \
+		|| { echo "error: the Vault pod cannot reach Dex at $(DEX_ISSUER)" >&2; exit 1; }; \
+	jq -e --arg i "$(DEX_ISSUER)" '.issuer == $$i' >/dev/null <<<"$$doc" \
+		|| { echo "error: Dex's issuer is not $(DEX_ISSUER)" >&2; exit 1; }
+	@echo "Dex answers as $(DEX_ISSUER) inside the Vault pod"
+
 # ─── E2E ─────────────────────────────────────────────────────────────
 
 # The suite (tests/e2e) installs and uninstalls the bootstrap chart itself, and
@@ -424,7 +507,7 @@ E2E_KEEP_ON_FAILURE ?=
 E2E_GO_TIMEOUT ?= 45m
 
 .PHONY: e2e-up
-e2e-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-vco lab-chart-repo ## The lab without the bootstrap chart: what the e2e suite starts from.
+e2e-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-keycloak lab-dex lab-vco lab-chart-repo ## The lab without the bootstrap chart: what the e2e suite starts from.
 	$(MAKE) lab-vault-bootstrap VERIFY_LOGIN=0
 
 .PHONY: e2e-test
@@ -437,6 +520,9 @@ e2e-test: helm ## Run tests/e2e against the lab. E2E_KEEP=1 leaves the install i
 		E2E_WAIT_TIMEOUT=$(E2E_WAIT_TIMEOUT) E2E_VCO_SYNC_PERIOD=$(VCO_SYNC_PERIOD_SECONDS)s \
 		E2E_KEEP_ON_FAILURE=$(E2E_KEEP_ON_FAILURE) \
 		E2E_VCO_NAMESPACE=$(VCO_NS) E2E_VCO_DEPLOYMENT=$(VCO_RELEASE) \
+		E2E_DEX_ISSUER=$(DEX_ISSUER) E2E_KEYCLOAK_URL=$(KEYCLOAK_URL) \
+		E2E_DEX_NAMESPACE=$(DEX_NS) E2E_KEYCLOAK_NAMESPACE=$(KEYCLOAK_NS) \
+		E2E_UI_CALLBACK='$(UI_CALLBACK)' \
 		go test ./tests/e2e/ -count=1 -v -timeout $(E2E_GO_TIMEOUT)
 
 .PHONY: e2e-kind
@@ -455,6 +541,8 @@ e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
 	-$(KC) -n external-secrets logs deploy/external-secrets --tail=2000 > e2e-logs/eso.log 2>&1
 	-$(KC) -n reloader logs deploy/reloader-reloader --tail=2000 > e2e-logs/reloader.log 2>&1
 	-$(KC) -n $(VAULT_NS) logs vault-0 --tail=2000 > e2e-logs/vault.log 2>&1
+	-$(KC) -n $(DEX_NS) logs deploy/dex --tail=2000 > e2e-logs/dex.log 2>&1
+	-$(KC) -n $(KEYCLOAK_NS) logs deploy/keycloak --tail=2000 > e2e-logs/keycloak.log 2>&1
 	@echo "diagnostics in ./e2e-logs"
 
 .PHONY: admission-test

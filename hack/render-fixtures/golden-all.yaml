@@ -193,6 +193,227 @@ spec:
   path: team-a/kubernetes
   type: kubernetes
 ---
+# Source: mto-extension-vault-community/templates/06-oidc-auth.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: team-a-oidc
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  # listingVisibility: see the kubernetes mount (01-tenant-scaffolding.yaml).
+  config:
+    listingVisibility: hidden
+  name: sso
+  path: team-a/oidc
+  type: oidc
+---
+# Source: mto-extension-vault-community/templates/06-oidc-auth.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineConfig
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: team-a-oidc-config
+  namespace: vault-config
+spec:
+  OIDCClientID: vault
+  OIDCCredentials:
+    passwordKey: client-secret
+    secret:
+      name: vault-oidc-client-secret
+  OIDCDiscoveryCAPEM: |
+    -----BEGIN CERTIFICATE-----
+    MIIBkTCB+wIJAJ3xVFyz0kQxMA0GCSqGSIb3DQEBCwUAMBExDzANBgNVBAMMBmRl
+    -----END CERTIFICATE-----
+  OIDCDiscoveryURL: https://dex.example.com
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  path: team-a/oidc/sso
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.admin
+  namespace: vault-config
+spec:
+  OIDCScopes:
+    - email
+    - profile
+    - groups
+  allowedRedirectURIs:
+    - http://localhost:8250/oidc/callback
+    - https://vault.example.com/ui/vault/auth/team-a/oidc/sso/oidc/callback
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  boundAudiences:
+    - vault
+  boundClaims:
+    groups:
+      - team-a-admins
+  groupsClaim: groups
+  name: sso.team-a.admin
+  path: team-a/oidc/sso
+  roleType: oidc
+  tokenMaxTTL: 1h
+  tokenPolicies:
+    - sso.team-a.admin
+  tokenTTL: 15m
+  userClaim: email
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.audit-read
+  namespace: vault-config
+spec:
+  OIDCScopes:
+    - email
+    - profile
+    - groups
+  allowedRedirectURIs:
+    - http://localhost:8250/oidc/callback
+    - https://vault.example.com/ui/vault/auth/team-a/oidc/sso/oidc/callback
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  boundAudiences:
+    - vault
+  boundClaims:
+    groups:
+      - team-a-audit-reads
+  groupsClaim: groups
+  name: sso.team-a.audit-read
+  path: team-a/oidc/sso
+  roleType: oidc
+  tokenMaxTTL: 1h
+  tokenPolicies:
+    - sso.team-a.audit-read
+  tokenTTL: 15m
+  userClaim: email
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.editor
+  namespace: vault-config
+spec:
+  OIDCScopes:
+    - email
+    - profile
+    - groups
+  allowedRedirectURIs:
+    - http://localhost:8250/oidc/callback
+    - https://vault.example.com/ui/vault/auth/team-a/oidc/sso/oidc/callback
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  boundAudiences:
+    - vault
+  boundClaims:
+    groups:
+      - team-a-editors
+  groupsClaim: groups
+  name: sso.team-a.editor
+  path: team-a/oidc/sso
+  roleType: oidc
+  tokenMaxTTL: 1h
+  tokenPolicies:
+    - sso.team-a.editor
+  tokenTTL: 15m
+  userClaim: email
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: JWTOIDCAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.viewer
+  namespace: vault-config
+spec:
+  OIDCScopes:
+    - email
+    - profile
+    - groups
+  allowedRedirectURIs:
+    - http://localhost:8250/oidc/callback
+    - https://vault.example.com/ui/vault/auth/team-a/oidc/sso/oidc/callback
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  boundAudiences:
+    - vault
+  boundClaims:
+    groups:
+      - team-a-viewers
+  groupsClaim: groups
+  name: sso.team-a.viewer
+  path: team-a/oidc/sso
+  roleType: oidc
+  tokenMaxTTL: 1h
+  tokenPolicies:
+    - sso.team-a.viewer
+  tokenTTL: 15m
+  userClaim: email
+---
 # Source: mto-extension-vault-community/templates/01-tenant-scaffolding.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: KubernetesAuthEngineConfig
@@ -460,6 +681,112 @@ spec:
     # 1. The app's own secrets, at team-a/kv/data/dev/team-a-tools/app-d/.
     path "team-a/kv/data/dev/team-a-tools/app-d/*"     { capabilities = ["list"] }
     path "team-a/kv/metadata/dev/team-a-tools/app-d/*" { capabilities = ["list"] }
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.admin
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: sso.team-a.admin
+  policy: |
+    # SSO role admin for tenant team-a.
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/data/dev/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/delete/dev/*"   { capabilities = ["update"] }
+    path "team-a/kv/undelete/dev/*" { capabilities = ["update"] }
+    path "team-a/kv/destroy/dev/*"  { capabilities = ["update"] }
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.audit-read
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: sso.team-a.audit-read
+  policy: |
+    # SSO role audit-read for tenant team-a.
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["list"] }
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.editor
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: sso.team-a.editor
+  policy: |
+    # SSO role editor for tenant team-a.
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/data/dev/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+---
+# Source: mto-extension-vault-community/templates/07-sso-policies.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: sso.team-a.viewer
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: sso.team-a.viewer
+  policy: |
+    # SSO role viewer for tenant team-a.
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/data/dev/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["read", "list"] }
 ---
 # Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
 apiVersion: v1

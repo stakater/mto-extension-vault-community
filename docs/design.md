@@ -298,7 +298,10 @@ Added for Community Edition:
   tenant's SSO mount has its own UI callback
   (`https://<vault>/ui/vault/auth/<tenant>/oidc/sso/oidc/callback`), so the
   client allows one redirect URI per tenant, or a wildcard; plus
-  `http://localhost:8250/oidc/callback` for the CLI. **VERIFY** in C.6.
+  `http://localhost:8250/oidc/callback` for the CLI, which every mount shares.
+  Verified in C.6: the chart takes `{tenant}` in
+  `parent.sso.allowedRedirectUris`; Keycloak accepts a wildcard, Dex does not,
+  so a Dex client lists every tenant.
 
 ## 10. What Community Edition can't isolate (documented, not hidden)
 

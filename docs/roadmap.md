@@ -126,7 +126,7 @@ set minus `VAULT_NAMESPACE` value); fails on any drift. Satisfies
 
 ## Phase 2 — Trustworthy
 
-**Story C.6 — Human SSO in four roles** 👍 *Approved*
+**Story C.6 — Human SSO in four roles** ✅ *Done*
 
 As a person in a tenant, I want to sign in to Vault with my identity-provider
 group and get my tenant's access at my role, so that nobody hands out tokens.
@@ -138,7 +138,8 @@ refused at render; the identity provider's redirect URI per tenant mount
 verified; live through Keycloak and Dex: each role logs in for its own group
 in its own tenant only, gets its role's capabilities, and can't administer
 Vault; a person removed from the group can't log in again. Satisfies
-**AC-ISO-6**, **AC-ISO-9**, **AC-ACC-1..4** (people), **AC-ACC-6**.
+**AC-ISO-6**, **AC-ISO-9**, **AC-ACC-1..4** (people), **AC-ACC-6**. Planning:
+[`planning/C6-human-sso.md`](planning/C6-human-sso.md).
 
 **Story C.7 — Sharing inside a tenant** 👍 *Approved*
 

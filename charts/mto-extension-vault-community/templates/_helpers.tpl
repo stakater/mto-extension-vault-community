@@ -493,3 +493,36 @@ Deployment lists the child TI resolves through its namespaceSelector.
 {{- end -}}
 {{- toYaml $ns -}}
 {{- end -}}
+
+{{/*
+The tenant's SSO OIDC auth mount, as Vault sees it, without the auth/ prefix:
+<tenant>/<path>/<name>, for example team-a/oidc/sso (ADR-0007).
+*/}}
+{{- define "vault.ssoMount" -}}
+{{- printf "%s/%s/%s" .Values.tenant (trimAll "/" .Values.sso.mount.path) (trimAll "/" .Values.sso.mount.name) -}}
+{{- end -}}
+
+{{/*
+Renders the IdP-side group name for a (tenant, role) pair.
+Resolution: tenantRoleMapping[<role>].pattern → tenantGroupTemplate → fail.
+*/}}
+{{- define "vault.ssoGroup" -}}
+{{- $roleEntry := index .mapping .role -}}
+{{- $pattern := "" -}}
+{{- if and $roleEntry (kindIs "map" $roleEntry) $roleEntry.pattern -}}
+{{- $pattern = $roleEntry.pattern -}}
+{{- else if .defaultTemplate -}}
+{{- $pattern = .defaultTemplate -}}
+{{- else -}}
+{{- fail (printf "sso: role %q has no pattern and no sso.tenantGroupTemplate default is set" .role) -}}
+{{- end -}}
+{{- $s := $pattern -}}
+{{- $s = replace "{tenant}" .tenant $s -}}
+{{- $s = replace "{role}" .role $s -}}
+{{- $s -}}
+{{- end -}}
+
+{{/* SSO Vault role/policy name for a (tenant, role) pair: sso.<tenant>.<role>. */}}
+{{- define "vault.ssoRoleName" -}}
+{{- printf "sso.%s.%s" .tenant .role -}}
+{{- end -}}

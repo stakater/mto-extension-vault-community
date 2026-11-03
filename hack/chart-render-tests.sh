@@ -47,6 +47,16 @@
 #   tokentype    — every role pins tokenType; batch + period fails.
 #   namecollide  — no two objects of one render share an identity, and parts
 #                  that glued to one name with hyphens now give distinct names.
+#   ssoredirect  — an empty sso.allowedRedirectUris fails at render, naming the
+#                  value; {tenant} in an entry becomes the tenant's name.
+#   ssorootlist  — every SSO policy can LIST the tenant's kv mount root.
+#   ssoroles     — an SSO role that is not a DNS label, or is named "fallback",
+#                  fails the render; a fallback mapping (a role with no group
+#                  binding) fails the render.
+#   ssobind      — every SSO role binds exactly its own policy, its tenant's OIDC
+#                  mount, exactly its tenant's group, string claims, and accepts
+#                  exactly sso.oidc.clientId as its audience.
+#   falsestring  — the STRING "false" turns no feature on; "true" does.
 #   contract     — the workload contract (annotation keys, Deployment forms, role
 #                  names, object names, ConfigMap keys; hack/contract.sh) equals
 #                  the pinned Enterprise chart's (hack/enterprise-contract.txt),
@@ -94,7 +104,9 @@
 #   tenantvalues — a tenantValues key the bootstrap owns is rejected, and a value
 #                  containing "{{" is rejected.
 #   ssoissuer    — the bootstrap refuses SSO without an issuer URL.
-#   removedkeys  — tenantValues still setting a removed key fails.
+#   removedkeys  — a values file or tenantValues still setting a removed key
+#                  (networkPolicy, sso.oidc.perTenantClient, sso.audience) fails;
+#                  the shared SSO client still renders.
 #   listingvis   — every mount the tenant chart and the parent render sets
 #                  config.listingVisibility.
 #                  Unset, VCO's finalizer update sends "" and its CRD enum refuses
@@ -361,6 +373,12 @@ yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-"
 [ -n "$vns" ] || { ma_ok=1; ma_detail="$ma_detail [no vault-config ConfigMap — the check proves nothing]"; }
 bad="$(grep -v '=$' <<<"$vns" || true)"
 [ -z "$bad" ] || { ma_ok=1; ma_detail="$ma_detail [VAULT_NAMESPACE not empty: $(tr '\n' ' ' <<<"$bad")]"; }
+yqs m_sso 'select(.kind == "AuthEngineMount" and .spec.type == "oidc") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
+yqs m_ssocfg 'select(.kind == "JWTOIDCAuthEngineConfig") | .spec.path' "$WORK/all.raw"
+yqs m_ssoroles 'select(.kind == "JWTOIDCAuthEngineRole") | .spec.path' "$WORK/all.raw"
+for pair in "oidc AuthEngineMount:$m_sso" "JWTOIDCAuthEngineConfig:$m_ssocfg" "oidc roles:$(sort -u <<<"$m_ssoroles")"; do
+  [ "${pair#*:}" = team-a/oidc/sso ] || { ma_ok=1; ma_detail="$ma_detail [${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
+done
 check mountagree "$ma_ok" "$ma_detail"
 
 # storepath
@@ -509,7 +527,93 @@ nc_pair() {
 printf 'tenant: a\nserviceAccounts:\n  - metadata: {name: d, namespace: b-c, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/xa.yaml"
 printf 'tenant: a-b\nserviceAccounts:\n  - metadata: {name: d, namespace: c, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/xb.yaml"
 nc_pair "a/b-c vs a-b/c" "$WORK/xa.yaml" "$WORK/xb.yaml"
+# Across name families: tenant sso's own Policy for namespace acme and
+# ServiceAccount admin vs tenant acme's SSO admin Policy (sso.acme.admin).
+printf 'tenant: sso\nserviceAccounts:\n  - metadata: {name: admin, namespace: acme, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/fa.yaml"
+printf 'tenant: acme\nsso: {enabled: true, oidc: {issuerUrl: "https://idp.example"}}\n' > "$WORK/fb.yaml"
+nc_pair "sso/acme/admin vs acme SSO admin" "$WORK/fa.yaml" "$WORK/fb.yaml"
 check namecollide "$nc_ok" "$nc_detail"
+
+# ssoredirect — both empty forms from a VALUES FILE: `--set x=[]` gives helm
+# the string "[]", which would never reach the guard.
+so_ok=0; so_detail=""
+printf 'sso:\n  allowedRedirectUris: []\n'   > "$WORK/ssor-empty.yaml"
+printf 'sso:\n  allowedRedirectUris: null\n' > "$WORK/ssor-null.yaml"
+for form in empty null; do
+  if render core "$FIXTURES/values-full.yaml" -f "$WORK/ssor-$form.yaml" > "$WORK/ssor.out" 2>&1; then
+    so_ok=1; so_detail="$so_detail [allowedRedirectUris=$form rendered]"; continue
+  fi
+  grep -q 'requires at least one entry in sso.allowedRedirectUris' "$WORK/ssor.out" \
+    || { so_ok=1; so_detail="$so_detail [$form failed elsewhere: $(first "$WORK/ssor.out")]"; }
+done
+yqs uris 'select(.kind == "JWTOIDCAuthEngineRole") | .spec.allowedRedirectURIs[]' "$WORK/all.raw"
+want_uris="$(printf '%s\n' http://localhost:8250/oidc/callback https://vault.example.com/ui/vault/auth/team-a/oidc/sso/oidc/callback)"
+[ "$(sort -u <<<"$uris")" = "$want_uris" ] || { so_ok=1; so_detail="$so_detail [redirect URIs rendered '$(sort -u <<<"$uris" | tr '\n' ' ')']"; }
+check ssoredirect "$so_ok" "$so_detail"
+
+# ssorootlist
+sl_ok=0; sl_detail=""
+n_sso=0
+yqs ssopols 'select(.kind == "Policy" and (.metadata.name | test("^sso[.]"))) | .metadata.name' "$WORK/all.raw"
+for p in $ssopols; do
+  n_sso=$((n_sso + 1))
+  yqs body "select(.kind == \"Policy\" and .metadata.name == \"$p\") | .spec.policy" "$WORK/all.raw"
+  grep -q 'path "team-a/kv/metadata" { capabilities = \["list"\] }' <<<"$body" || { sl_ok=1; sl_detail="$sl_detail [$p cannot list the kv root]"; }
+done
+[ "$n_sso" -eq 4 ] || { sl_ok=1; sl_detail="$sl_detail [expected 4 SSO role policies, found $n_sso]"; }
+check ssorootlist "$sl_ok" "$sl_detail"
+
+# ssoroles — every bad role fails with its own message; the default roles render.
+st_ok=0; st_detail=""
+printf 'sso:\n  roles: [fallback]\nroleCaps:\n  fallback: %s\n' "'[\"read\"]'" > "$WORK/sst-fallback.yaml"
+printf 'sso:\n  roles: [Bad.Role]\n' > "$WORK/sst-dns.yaml"
+printf 'sso:\n  tenantRoleMapping:\n    fallback: viewer\n' > "$WORK/sst-mapping.yaml"
+for c in "fallback:is reserved" "dns:is not a DNS label" "mapping:a fallback role binds no group"; do
+  name="${c%%:*}"; msg="${c#*:}"
+  if render core "$FIXTURES/values-full.yaml" -f "$WORK/sst-$name.yaml" > /dev/null 2>"$WORK/sst.err"; then
+    st_ok=1; st_detail="$st_detail [$name rendered]"
+  else
+    grep -q -- "$msg" "$WORK/sst.err" || { st_ok=1; st_detail="$st_detail [$name failed elsewhere: $(first "$WORK/sst.err")]"; }
+  fi
+done
+yqs ssoroles 'select(.kind == "JWTOIDCAuthEngineRole") | .metadata.name' "$WORK/all.raw"
+[ "$(lines "$ssoroles")" = 4 ] || { st_ok=1; st_detail="$st_detail [values-full rendered $(lines "$ssoroles") SSO roles, want 4 — the refusals above prove nothing]"; }
+check ssoroles "$st_ok" "$st_detail"
+
+# ssobind
+sb_ok=0; sb_detail=""
+render all "$FIXTURES/values-full.yaml" --set sso.oidc.clientId=mto-vault > "$WORK/sb-custom.yaml" 2>"$WORK/sb.err" \
+  || { sb_ok=1; sb_detail="$sb_detail [render with sso.oidc.clientId=mto-vault failed: $(first "$WORK/sb.err")]"; }
+for c in "default:$WORK/all.raw:vault" "custom:$WORK/sb-custom.yaml:mto-vault"; do
+  name="${c%%:*}"; rest="${c#*:}"; file="${rest%:*}"; aud="${rest##*:}"
+  yqs sbroles 'select(.kind == "JWTOIDCAuthEngineRole") | .metadata.name + " " + (.spec.tokenPolicies | join(",")) + " " + .spec.path + " " + (.spec.boundClaims.groups | join(",")) + " " + (.spec.boundClaimsType // "string") + " " + (.spec.boundAudiences | join(","))' "$file"
+  [ -n "$sbroles" ] || { sb_ok=1; sb_detail="$sb_detail [$name: no SSO role]"; continue; }
+  while read -r rname pols path groups ctype auds; do
+    role="${rname##*.}"
+    want="$rname team-a/oidc/sso team-a-${role}s string $aud"
+    [ "$pols $path $groups $ctype $auds" = "$want" ] || sb_detail="$sb_detail [$name: $rname binds '$pols $path $groups $ctype $auds', want '$want']"
+  done <<<"$sbroles"
+done
+[ -z "$sb_detail" ] || sb_ok=1
+check ssobind "$sb_ok" "$sb_detail"
+
+# falsestring — schema kept on: it accepts "false", which is the point
+fs_ok=0; fs_detail=""
+render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=false > "$WORK/fs-false.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"false\" did not render: $(first "$WORK/fs.err")]"; }
+yqs fson 'select(.kind == "JWTOIDCAuthEngineConfig" or .kind == "JWTOIDCAuthEngineRole" or (.kind == "AuthEngineMount" and .spec.type == "oidc")) | .kind' "$WORK/fs-false.yaml"
+[ -z "$fson" ] || { fs_ok=1; fs_detail="$fs_detail [the string \"false\" rendered: $(sort -u <<<"$fson" | tr '\n' ' ')]"; }
+render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=true > "$WORK/fs-true.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"true\" did not render: $(first "$WORK/fs.err")]"; }
+yqs fsyes 'select(.kind == "JWTOIDCAuthEngineConfig") | .kind' "$WORK/fs-true.yaml"
+[ "$fsyes" = JWTOIDCAuthEngineConfig ] || { fs_ok=1; fs_detail="$fs_detail [the string \"true\" did not render SSO: '$fsyes']"; }
+if "$HELM" template x "$WORK/noschema/tenant" -n "$NS" --set tenant=t --set-string sso.enabled=on --set sso.oidc.issuerUrl=https://idp > /dev/null 2>"$WORK/tg.err"; then
+  fs_ok=1; fs_detail="$fs_detail [tenant sso.enabled=on without schema rendered]"
+else
+  grep -q 'sso.enabled must be true or false' "$WORK/tg.err" || { fs_ok=1; fs_detail="$fs_detail [sso.enabled=on was not refused by the guard: $(first "$WORK/tg.err")]"; }
+fi
+if "$HELM" template x "$WORK/notpl/tenant" -n "$NS" --set tenant=t --set-string sso.enabled=on > /dev/null 2>"$WORK/tg.err"; then
+  fs_ok=1; fs_detail="$fs_detail [the schema accepted sso.enabled=on]"
+fi
+check falsestring "$fs_ok" "$fs_detail"
 
 # contract
 ct_ok=0; ct_detail=""
@@ -930,6 +1034,17 @@ for c in "tenantValues.networkPolicy.enabled=true:NetworkPolicy feature was remo
     grep -q -- "${c#*:}" "$WORK/rk.err" || { rk_ok=1; rk_detail="$rk_detail [${c%%:*} failed elsewhere: $(first "$WORK/rk.err")]"; }
   fi
 done
+for c in "networkPolicy.enabled=true:networkPolicy was removed" "sso.oidc.perTenantClient=false:sso.oidc.perTenantClient was removed" \
+         "sso.audience=vault:sso.audience was removed"; do
+  if render all "$FIXTURES/values-full.yaml" --set "${c%%:*}" > /dev/null 2>"$WORK/rk.err"; then
+    rk_ok=1; rk_detail="$rk_detail [the tenant chart accepted ${c%%:*}]"
+  else
+    grep -q -- "${c#*:}" "$WORK/rk.err" || { rk_ok=1; rk_detail="$rk_detail [tenant ${c%%:*} failed elsewhere: $(first "$WORK/rk.err")]"; }
+  fi
+done
+# The SSO config still renders the one shared client when the keys are absent.
+yqs cid 'select(.kind == "JWTOIDCAuthEngineConfig") | .spec.OIDCClientID + " " + .spec.OIDCCredentials.secret.name' "$WORK/all.raw"
+[ "$cid" = "vault vault-oidc-client-secret" ] || { rk_ok=1; rk_detail="$rk_detail [the shared SSO client rendered '$cid', want 'vault vault-oidc-client-secret']"; }
 check removedkeys "$rk_ok" "$rk_detail"
 
 # listingvis — every mount sets config.listingVisibility to a value VCO's

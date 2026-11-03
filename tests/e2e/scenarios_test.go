@@ -95,6 +95,23 @@ func TestE2E(t *testing.T) {
 				vaultRoot(t, "auth", "disable", k8sAuthMount(tn))
 			}
 		}
+		// SSO needs the lab's Dex and Keycloak. Checked here, so a lab without
+		// them fails in one clear line instead of at the SSO step.
+		if got := dexIssuerFromVault(t); got != dexIssuer {
+			t.Fatalf("Dex names its issuer %q, want %q: tokens would not validate", got, dexIssuer)
+		}
+		// The SSO roles allow the CLI callback and each tenant's UI callback
+		// (helmInstall). Dex must too, or it refuses the login with
+		// "Unregistered redirect_uri"; it has no wildcard, so one per tenant.
+		dexRedirects := dexClientRedirects(t)
+		for _, want := range []string{cliCallback, uiCallbackFor(alpha), uiCallbackFor(beta)} {
+			if !slices.Contains(dexRedirects, want) {
+				t.Fatalf("Dex client %s does not allow the redirect URI %s (it allows %v)", dexClient, want, dexRedirects)
+			}
+		}
+		for _, u := range []string{"alice", "bob", "carol", "dave", "erin"} {
+			testUserPassword(t, u)
+		}
 		// VCO's own login must be the one make lab-vault-bootstrap wrote.
 		if a := vaultKeys(t, "auth", "list", "-format=json"); !slices.Contains(a, vcoLoginMount+"/") {
 			t.Fatalf("VCO's login mount %s/ is missing: %v — run make lab-vault-bootstrap", vcoLoginMount, a)
@@ -150,6 +167,7 @@ func TestE2E(t *testing.T) {
 		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		createServiceAccount(t, betaNS, "reader", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "viewer"})
 		createServiceAccount(t, coreNS, "core", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "admin"})
+		copyOIDCClientSecret(t)
 		helmInstall(t)
 		waitTIReady(t, parentName)
 		for _, tn := range e2eTenants {
@@ -516,6 +534,139 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	step("sso: Keycloak users log in through Dex with their group's role", func(t *testing.T) {
+		// Keycloak holds the users and groups, Dex fronts it through Keycloak's
+		// "dex" client, and each tenant's auth/<tenant>/oidc/sso roles bind one
+		// group each (<tenant>-<role>s). The test users (make lab-keycloak):
+		//   alice e2e-alpha-editors   bob e2e-alpha-viewers   carol e2e-beta-admins
+		for _, tn := range []string{alpha, beta} {
+			waitVCO(t, "authenginemounts", tn+"-oidc")
+			waitVCO(t, "jwtoidcauthengineconfigs", tn+"-oidc-config")
+			for _, role := range []string{"admin", "editor", "viewer", "audit-read"} {
+				waitVCO(t, "jwtoidcauthengineroles", ssoRole(tn, role))
+			}
+		}
+		c := newSSOClient(t)
+		note := env + "/sso/note"
+
+		// The group gives the role: alice's editor login writes.
+		aliceToken, pols, err := oidcLogin(t, c, alpha, ssoRole(alpha, "editor"), "alice", testUserPassword(t, "alice"))
+		if err != nil || !slices.Contains(pols, ssoRole(alpha, "editor")) {
+			t.Fatalf("alice (e2e-alpha-editors) could not log in as editor: policies %v, err %v", pols, err)
+		}
+		if err := kvPut(t, aliceToken, alpha, note, "by=alice"); err != nil {
+			t.Fatalf("the SSO editor could not write in its tenant: %v", err)
+		}
+		// bob's viewer login reads what alice wrote, and cannot write it:
+		// alice's write above, same path, is the matching allow.
+		bobToken, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "viewer"), "bob", testUserPassword(t, "bob"))
+		if err != nil {
+			t.Fatalf("bob (e2e-alpha-viewers) could not log in as viewer: %v", err)
+		}
+		if got, err := kvGet(t, bobToken, alpha, note, "by"); err != nil || got != "alice" {
+			t.Errorf("the SSO viewer could not read in its tenant: got %q, err %v", got, err)
+		}
+		if err := kvPut(t, bobToken, alpha, note, "by=bob"); !refused(err) {
+			t.Errorf("the SSO viewer wrote a secret; err: %v", err)
+		}
+		// A group gives only its own role: bob cannot take the editor role.
+		if _, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "editor"), "bob", testUserPassword(t, "bob")); !claimRefused(err) {
+			t.Errorf("bob (e2e-alpha-viewers) was not refused the editor role for the group; err: %v", err)
+		}
+
+		// AC-ISO-6. Tenants: carol (e2e-beta-admins) logs in at e2e-beta's mount,
+		// and alice cannot.
+		carolToken, _, err := oidcLogin(t, c, beta, ssoRole(beta, "admin"), "carol", testUserPassword(t, "carol"))
+		if err != nil {
+			t.Fatalf("carol (e2e-beta-admins) could not log in to e2e-beta: %v", err)
+		}
+		if _, _, err := oidcLogin(t, c, beta, ssoRole(beta, "editor"), "alice", testUserPassword(t, "alice")); !claimRefused(err) {
+			t.Errorf("alice (e2e-alpha-editors) was not refused an e2e-beta role for the group; err: %v", err)
+		}
+		// And alice's e2e-alpha token does not reach e2e-beta's mount, which carol reads.
+		if err := kvPut(t, carolToken, beta, note, "by=carol"); err != nil {
+			t.Fatalf("the SSO admin could not write in its tenant: %v", err)
+		}
+		if _, err := kvGet(t, aliceToken, beta, note, "by"); !refused(err) {
+			t.Errorf("an e2e-alpha SSO token read e2e-beta's secret; err: %v", err)
+		}
+	})
+
+	step("sso: audit-read lists and reads nothing, only admin destroys history", func(t *testing.T) {
+		// dave (e2e-alpha-audit-reads) and erin (e2e-alpha-admins), on the note
+		// alice wrote in the step above.
+		c := newSSOClient(t)
+		note := env + "/sso/note"
+		daveToken, pols, err := oidcLogin(t, c, alpha, ssoRole(alpha, "audit-read"), "dave", testUserPassword(t, "dave"))
+		if err != nil || !slices.Contains(pols, ssoRole(alpha, "audit-read")) {
+			t.Fatalf("dave (e2e-alpha-audit-reads) could not log in as audit-read: policies %v, err %v", pols, err)
+		}
+		out, err := kv(t, daveToken, alpha, "list", "-format=json", env+"/sso/")
+		if err != nil || !strings.Contains(out, "note") {
+			t.Errorf("audit-read could not list the tenant's secrets: %q, err %v", out, err)
+		}
+		erinToken, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "admin"), "erin", testUserPassword(t, "erin"))
+		if err != nil {
+			t.Fatalf("erin (e2e-alpha-admins) could not log in as admin: %v", err)
+		}
+		// erin's read is the matching allow for dave's refusal.
+		if got, err := kvGet(t, erinToken, alpha, note, "by"); err != nil || got != "alice" {
+			t.Fatalf("the SSO admin could not read the note: got %q, err %v", got, err)
+		}
+		if _, err := kvGet(t, daveToken, alpha, note, "by"); !refused(err) {
+			t.Errorf("audit-read read secret data; err: %v", err)
+		}
+		// Destroying a version: the editor is refused, then the admin does it.
+		aliceToken, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "editor"), "alice", testUserPassword(t, "alice"))
+		if err != nil {
+			t.Fatalf("alice could not log in again: %v", err)
+		}
+		if _, err := kv(t, aliceToken, alpha, "destroy", "-versions=1", note); !refused(err) {
+			t.Errorf("the SSO editor destroyed a version; err: %v", err)
+		}
+		if _, err := kv(t, erinToken, alpha, "destroy", "-versions=1", note); err != nil {
+			t.Errorf("the SSO admin could not destroy a version: %v", err)
+		}
+		// AC-ISO-9: the admin role administers secrets, never Vault. Every call
+		// below is one VCO's own policy makes; the admin's destroy above is the
+		// allow in the same tenant.
+		for _, c := range []struct {
+			what string
+			args []string
+		}{
+			{"write a policy", []string{"write", "sys/policy/" + roleName(alpha, alphaNS, "erin"), `policy=path "` + kvMount(alpha) + `/*" { capabilities = ["read"] }`}},
+			{"rewrite its own SSO policy", []string{"write", "sys/policy/" + ssoRole(alpha, "admin"), `policy=path "*" { capabilities = ["sudo"] }`}},
+			{"mount a secrets engine", []string{"secrets", "enable", "-path=" + alpha + "/kv2", "kv"}},
+			{"tune its tenant's mount", []string{"write", kvMount(alpha) + "/config", "max_versions=1"}},
+			{"write a workload role", []string{"write", "auth/" + k8sAuthMount(alpha) + "/role/" + roleName(alpha, alphaNS, "erin"), "bound_service_account_names=*", "bound_service_account_namespaces=*"}},
+			{"write an SSO role", []string{"write", "auth/" + ssoMount(alpha) + "/role/" + ssoRole(alpha, "erin"), "user_claim=sub"}},
+			{"read the identity store", []string{"list", "identity/entity/id"}},
+		} {
+			if _, err := vaultRun(t, erinToken, c.args...); !refused(err) {
+				t.Errorf("the SSO admin could %s; err: %v", c.what, err)
+			}
+		}
+	})
+
+	step("sso: a person removed from the group can't log in again", func(t *testing.T) {
+		// AC-ACC-6. Removed from e2e-alpha-editors in Keycloak, alice's next
+		// editor login is refused for the group; added back, it works again.
+		// A token issued before stays valid to its TTL (design §7), so only new
+		// logins are checked.
+		c := newSSOClient(t)
+		keycloakGroup(t, "remove", "alice", "e2e-alpha-editors")
+		t.Cleanup(func() { keycloakGroup(t, "add", "alice", "e2e-alpha-editors") })
+		// alice was in that one group only, so her new ID token has no groups
+		// claim at all: groupRefused accepts that reason as well.
+		if _, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "editor"), "alice", testUserPassword(t, "alice")); !groupRefused(err) {
+			t.Errorf("alice, removed from e2e-alpha-editors, was not refused the editor role; err: %v", err)
+		}
+		keycloakGroup(t, "add", "alice", "e2e-alpha-editors")
+		if _, _, err := oidcLogin(t, c, alpha, ssoRole(alpha, "editor"), "alice", testUserPassword(t, "alice")); err != nil {
+			t.Errorf("alice, added back to e2e-alpha-editors, could not log in (the matching allow): %v", err)
+		}
+	})
+
 	step("vco: the production policy can't widen VCO or delete data", func(t *testing.T) {
 		// AC-ISO-7, AC-LIFE-4. The production policy (charts/examples), loaded
 		// under a check name, in a token that holds only it. Each refusal has
@@ -570,7 +721,7 @@ func TestE2E(t *testing.T) {
 		cctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(cctx, "bash", "../../hack/lab/admission-cases.sh")
-		cmd.Env = append(os.Environ(), "CONTEXT="+kubeContext, "CONFIG_NS="+configNS, "KUBECTL="+kubectlBin())
+		cmd.Env = append(os.Environ(), "CONTEXT="+kubeContext, "CONFIG_NS="+configNS, "KUBECTL="+kubectlBin(), "ISSUER="+dexIssuer)
 		raw, err := cmd.CombinedOutput()
 		out := string(raw)
 		if err != nil {

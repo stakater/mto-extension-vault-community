@@ -246,3 +246,48 @@ ConfigMap explains why. Two Deployments that ask for the same secret through
 one ServiceAccount share one ExternalSecret; two that ask for different
 secrets under one name are both refused. With ESO disabled install-wide, a
 Deployment that asks gets a `deploy-error` and no Secret.
+
+## Human SSO
+
+With `parent.sso.enabled=true`, each tenant gets its own OIDC auth mount
+`auth/<tenant>/oidc/sso` and one Vault role per entry of `sso.roles`, named
+`sso.<tenant>.<role>`, bound to exactly the IdP group `<tenant>-<role>s`
+(`sso.tenantGroupTemplate`). Each role's policy reaches the tenant's mount
+`<tenant>/kv` at that role's capabilities, and nothing else: no role, `admin`
+included, can write a policy, a mount, an auth role or the mount's config.
+
+Every tenant uses one IdP client, `sso.oidc.clientId` (also the audience every
+role accepts, because an ID token's `aud` is the client ID). Its secret is a
+Secret in `configNamespace`, `sso.oidc.clientSecretRef`.
+
+**Redirect URIs are per tenant.** Vault Community has no namespaces, so each
+tenant's mount has its own UI callback:
+`https://<vault>/ui/vault/auth/<tenant>/oidc/sso/oidc/callback`. Write it once
+in `parent.sso.allowedRedirectUris` with `{tenant}`, and each tenant's roles get
+their own:
+
+```yaml
+parent:
+  sso:
+    enabled: true
+    issuerUrl: https://idp.example.com
+    allowedRedirectUris:
+      - http://localhost:8250/oidc/callback            # the vault CLI, same for every mount
+      - https://vault.example.com/ui/vault/auth/{tenant}/oidc/sso/oidc/callback
+```
+
+The IdP client must allow the same URIs: one per tenant, or a wildcard where
+the IdP supports one. Keycloak accepts `…/ui/vault/auth/*`; Dex has no
+wildcard, so its client lists every tenant (the lab's `make lab-dex` builds
+that list). Enterprise avoids this with `namespace_in_state`.
+
+```bash
+vault login -method=oidc -path=<tenant>/oidc/sso role=sso.<tenant>.editor
+```
+
+A role works only for its group, and only in its tenant: a login with another
+group's role is refused with "does not match any associated bound claim
+values". There is no fallback role: `sso.tenantRoleMapping.fallback` must stay
+`deny`, because a role without a group binding would give any valid token of
+the IdP that tenant's access. A person removed from a group can't log in
+again; a token already issued lives to its TTL (`ssoToken.ttl`, default 15m).

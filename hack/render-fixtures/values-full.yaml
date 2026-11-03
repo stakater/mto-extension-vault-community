@@ -24,6 +24,20 @@ kubernetesAuth:
   # Renders spec.tokenReviewerServiceAccount.
   tokenReviewerServiceAccount: vault-token-reviewer
 
+sso:
+  enabled: true
+  oidc:
+    issuerUrl: "https://dex.example.com"
+    # Renders spec.OIDCDiscoveryCAPEM.
+    caBundlePem: |
+      -----BEGIN CERTIFICATE-----
+      MIIBkTCB+wIJAJ3xVFyz0kQxMA0GCSqGSIb3DQEBCwUAMBExDzANBgNVBAMMBmRl
+      -----END CERTIFICATE-----
+  # The CLI callback, and a UI callback per tenant mount ({tenant}).
+  allowedRedirectUris:
+    - "http://localhost:8250/oidc/callback"
+    - "https://vault.example.com/ui/vault/auth/{tenant}/oidc/sso/oidc/callback"
+
 # Renders tokenPeriod.
 token:
   ttl: 3600
