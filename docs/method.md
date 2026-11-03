@@ -41,7 +41,7 @@ regression test pins the behaviour it fixed.
 | Approval gate | human in the loop | 📝 Draft → 👍 Approved only by a human | `.github/CODEOWNERS` owns `docs/roadmap.md` and `docs/adr/`; branch protection requires a code owner's review |
 | PRs trace to a story | traceability | every PR cites its story code | PR workflow: `check_method.py pr-body` fails without a known code or `No story: <reason>` |
 | Immutable decisions | ADRs (Nygard) | `docs/adr/`, superseded never edited | PR workflow: `check_method.py adr-diff` fails if an Accepted ADR changes beyond `Superseded by ADR-NNNN`; `make method` checks status values and the index |
-| Test first | TDD (Beck) | a failing render test (golden, schema, guard) or acceptance check before the change | review today; `make verify` once C.1 ports the render harness (gap below) |
+| Test first | TDD (Beck) | a failing render test (golden, schema, guard) or acceptance check before the change | `make verify`: the render harness (`hack/chart-render-tests.sh`), every guard mutation-tested; the e2e suite for live behaviour |
 | Green before done | Definition of Done | `make verify` green, output seen | `make verify` locally; the same target in CI on every PR |
 | Docs move with the code | docs as source of truth | a change that leaves `docs/` stale is unfinished | `make lint` (markdownlint) and `make links` (every relative link resolves); review |
 | Facts before design | evidence over inference | Vault behaviour cited to `vault-community-baseline.md` rows; unknowns marked VERIFY | review; C.0 |
@@ -54,9 +54,7 @@ regression test pins the behaviour it fixed.
 
 | Gap | Until it closes | Story |
 |---|---|---|
-| No chart yet, so "red first" has no render test to fail | review enforces test-first | C.1 ports the render harness into `make verify` |
 | The `verify` check is not yet a required status check, so a red PR can still be merged | reviewers don't merge red | DX.1 |
-| Nothing runs on each local edit (kube-ward has a PostToolUse hook) | `make verify` before pushing; CI is the backstop | DX.2 |
 
 ## Story lifecycle
 

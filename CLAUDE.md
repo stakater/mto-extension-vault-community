@@ -17,15 +17,21 @@ charts shape, the same vault-config-operator (VCO) CRs, and the same workload
 contract (annotations, roles, names, ConfigMap keys). `docs/design.md` §2 lists
 the only three differences.
 
-## Status: porting the charts, story by story
+## Status: Phases 1 and 2 done
 
-C.0, the live-install spike, is done (`docs/spikes/c0-findings.md`); ADRs
-0001 to 0006 are Accepted. The charts are being ported from the Enterprise
-extension one story at a time (`docs/roadmap.md`, Phases 1 and 2). `make
+C.0, the live-install spike, is done (`docs/spikes/c0-findings.md`). ADRs 0001,
+0003, 0004, 0005, 0007 and 0008 are Accepted; 0007 and 0008 supersede 0002 and
+0006 (share roles on the tenant's own mount). C.1 to C.11 and DX.2 are done
+(`docs/roadmap.md`): both charts, the admission policies, the lab, and an e2e
+suite that proves them on Vault Community 2.1.1 (`make e2e-kind`). `make
 verify` is the gate: markdownlint, relative links, the method checks, chart
 lint, the render tests (`hack/chart-render-tests.sh`) and CRD validation
 against the vendored VCO CRDs. CI runs it on every PR, plus the version-bump,
 ADR-immutability and story-citation checks.
+
+In a Claude Code session, a PostToolUse hook (`.claude/settings.json`,
+`hack/claude-post-edit.sh`) runs `make method links` after every edit to a
+Markdown file, and shows a failure at once.
 
 ## Invariants — never violate these
 

@@ -238,14 +238,15 @@ method can't be skipped by merging past a failing check.
 Done: `verify` listed in `required_status_checks_jobs` for this repo in
 `stakater/stakater-github-config`; a PR with a failing check can't be merged.
 
-**Story DX.2 — The method on every edit** 👍 *Approved*
+**Story DX.2 — The method on every edit** ✅ *Done*
 
 As an engineer or agent, I want `make verify` to run after every edit, so that
 a broken rule shows up while I work rather than at the PR, as in kube-ward.
 
 Done: a Claude Code PostToolUse hook in `.claude/settings.json` runs the fast
 checks (`make method links`) after each edit to a Markdown file; the hook is
-documented in `CLAUDE.md`.
+documented in `CLAUDE.md`. Planning:
+[`planning/DX2-method-on-every-edit.md`](planning/DX2-method-on-every-edit.md).
 
 ---
 
