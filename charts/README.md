@@ -273,6 +273,18 @@ one ServiceAccount share one ExternalSecret; two that ask for different
 secrets under one name are both refused. With ESO disabled install-wide, a
 Deployment that asks gets a `deploy-error` and no Secret.
 
+ESO re-reads Vault every `parent.externalSecretRefreshInterval` (default 1h)
+and updates the Secret. An environment variable is read only at container
+start, so to roll the Deployment when the Secret changes, add Stakater
+Reloader's own annotation to it — the charts render nothing for it:
+
+```yaml
+metadata:
+  annotations:
+    vault.stakater.com/kv-secret.db: "db#password"
+    secret.reloader.stakater.com/reload: "<sa>-db"
+```
+
 ## Human SSO
 
 With `parent.sso.enabled=true`, each tenant gets its own OIDC auth mount

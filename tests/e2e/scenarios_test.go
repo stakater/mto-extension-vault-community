@@ -880,6 +880,8 @@ spec:
 		// and the ExternalSecret's key is relative to it.
 		createDeployment(t, alphaNS, "web", "web", map[string]string{
 			annPrefix + "kv-secret.db": "db#password",
+			// Reloader restarts the Deployment when this Secret changes (C.10).
+			"secret.reloader.stakater.com/reload": "web-db",
 		}, []corev1.EnvVar{secretEnv("PASSWORD", "web-db", "password")})
 		waitFor(t, "ExternalSecret web-db synced", func() string {
 			if v := secretValue(t, alphaNS, "web-db", "password"); v != "v1" {
@@ -901,6 +903,38 @@ spec:
 				return err.Error()
 			} else if v != "v1" {
 				return "PASSWORD=" + v
+			}
+			return ""
+		})
+	})
+
+	step("reloader: a rotated secret reaches a new pod", func(t *testing.T) {
+		// AC-DEL-2.
+		before := runningPod(t, alphaNS, "web")
+		if before == "" {
+			t.Fatal("no running web pod to compare against")
+		}
+		// Rotated as the WORKLOAD, through its own grant.
+		if err := kvPut(t, webToken, alpha, appPath(alphaNS, "web", "db"), "password=v2"); err != nil {
+			t.Fatalf("rotate: %v", err)
+		}
+		waitFor(t, "ESO refreshes Secret web-db to v2", func() string {
+			if v := secretValue(t, alphaNS, "web-db", "password"); v != "v2" {
+				return "password=" + v
+			}
+			return ""
+		})
+		// An env var is read once at container start, so only a NEW pod can see
+		// v2: seeing it proves Reloader rolled the Deployment.
+		waitFor(t, "Reloader rolls web and the new pod sees PASSWORD=v2", func() string {
+			p := runningPod(t, alphaNS, "web")
+			if p == "" || p == before {
+				return "pod not replaced yet (current: " + p + ")"
+			}
+			if v, err := podEnv(t, alphaNS, p, "PASSWORD"); err != nil {
+				return err.Error()
+			} else if v != "v2" {
+				return "new pod " + p + " has PASSWORD=" + v
 			}
 			return ""
 		})

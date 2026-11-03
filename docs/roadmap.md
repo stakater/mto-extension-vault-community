@@ -181,13 +181,14 @@ recreated (it adopts the retained data, visible); the admin purge order
 documented in `charts/README.md`. Satisfies **AC-LIFE-2..5**, **AC-ACC-5**.
 Planning: [`planning/C9-lifecycle-keeps-data.md`](planning/C9-lifecycle-keeps-data.md).
 
-**Story C.10 — Rotation reaches the pod** 👍 *Approved*
+**Story C.10 — Rotation reaches the pod** ✅ *Done*
 
 As an application team, I want a new secret version to reach my pod without a
 manual restart, so that rotation is routine.
 
 Done: the Reloader annotation documented; live: a new version written in Vault
-reaches a new pod through ESO and Reloader. Satisfies **AC-DEL-2**.
+reaches a new pod through ESO and Reloader. Satisfies **AC-DEL-2**. Planning:
+[`planning/C10-rotation-reaches-the-pod.md`](planning/C10-rotation-reaches-the-pod.md).
 
 **Story C.11 — Health and preflight** 👍 *Approved*
 
