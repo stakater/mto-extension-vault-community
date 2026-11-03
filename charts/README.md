@@ -227,3 +227,22 @@ says what is wrong, and nothing else. Reported per ServiceAccount rather than
 failing the render, so one namespace's mistake does not stop the tenant's other
 namespaces. An unknown `vault.stakater.com/` key is an error, not ignored; so
 are `transit` and `pki`, which this extension does not support.
+
+### ExternalSecrets
+
+With ESO enabled (`parent.eso=enabled`), every annotated ServiceAccount also
+gets a `SecretStore <sa>-vault`. It logs in as the ServiceAccount at
+`<tenant>/kubernetes/workloads`, reads the tenant's mount `<tenant>/kv` (KV v2),
+and has no Vault namespace. Annotate the Deployment:
+
+| Annotation | Value | Reads |
+|---|---|---|
+| `vault.stakater.com/kv-secret.<name>` | `<leaf>[#<key>]` | the app's own `<leaf>`; with `#<key>` only that key, else every key of the leaf |
+
+Each renders ExternalSecret and Secret `<sa>-<name>`, where `<sa>` is the
+Deployment's `serviceAccountName`. It must be an annotated ServiceAccount that
+grants the path; otherwise a `vault-config-<deployment>.deploy-error`
+ConfigMap explains why. Two Deployments that ask for the same secret through
+one ServiceAccount share one ExternalSecret; two that ask for different
+secrets under one name are both refused. With ESO disabled install-wide, a
+Deployment that asks gets a `deploy-error` and no Secret.

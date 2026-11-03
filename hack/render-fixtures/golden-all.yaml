@@ -1,3 +1,169 @@
+# Source: mto-extension-vault-community/templates/05-deployment-externalsecrets.yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: payments
+  name: app-a-web-cfg
+  namespace: team-a-dev
+spec:
+  dataFrom:
+    - extract:
+        key: dev/team-a-dev/payments/app-config
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: app-a-vault
+  target:
+    creationPolicy: Owner
+    name: app-a-web-cfg
+---
+# Source: mto-extension-vault-community/templates/05-deployment-externalsecrets.yaml
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: payments
+  name: app-a-web-db
+  namespace: team-a-dev
+spec:
+  data:
+    - remoteRef:
+        key: dev/team-a-dev/payments/db-creds
+        property: password
+      secretKey: password
+  refreshInterval: 1h
+  secretStoreRef:
+    kind: SecretStore
+    name: app-a-vault
+  target:
+    creationPolicy: Owner
+    name: app-a-web-db
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: payments
+  name: app-a-vault
+  namespace: team-a-dev
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: team-a/kubernetes/workloads
+          role: kv.team-a.team-a-dev.app-a
+          serviceAccountRef:
+            name: app-a
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJGSVhUVVJFT05MWU5PVEFSRUFMQ0VSVEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+      path: team-a/kv
+      server: http://vault.vault.svc.cluster.local:8200
+      version: v2
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-c
+  name: app-c-vault
+  namespace: team-a-dev
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: team-a/kubernetes/workloads
+          role: kv.team-a.team-a-dev.app-c
+          serviceAccountRef:
+            name: app-c
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJGSVhUVVJFT05MWU5PVEFSRUFMQ0VSVEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+      path: team-a/kv
+      server: http://vault.vault.svc.cluster.local:8200
+      version: v2
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-b
+  name: app-b-vault
+  namespace: team-a-tools
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: team-a/kubernetes/workloads
+          role: kv.team-a.team-a-tools.app-b
+          serviceAccountRef:
+            name: app-b
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJGSVhUVVJFT05MWU5PVEFSRUFMQ0VSVEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+      path: team-a/kv
+      server: http://vault.vault.svc.cluster.local:8200
+      version: v2
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-d
+  name: app-d-vault
+  namespace: team-a-tools
+spec:
+  provider:
+    vault:
+      auth:
+        kubernetes:
+          mountPath: team-a/kubernetes/workloads
+          role: kv.team-a.team-a-tools.app-d
+          serviceAccountRef:
+            name: app-d
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJGSVhUVVJFT05MWU5PVEFSRUFMQ0VSVEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUEKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+      path: team-a/kv
+      server: http://vault.vault.svc.cluster.local:8200
+      version: v2
+---
 # Source: mto-extension-vault-community/templates/01-tenant-scaffolding.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: AuthEngineMount

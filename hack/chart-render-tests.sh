@@ -16,6 +16,7 @@
 #   golden       — component=all is object-set identical to the committed golden.
 #   disjoint     — no object is emitted by both slices (two TIs would fight over it via SSA).
 #   union        — core ∪ eso emits exactly the all set.
+#   exclusivity  — external-secrets.io objects appear only in the eso slice.
 #   empty        — the eso slice with no opt-ins renders zero objects.
 #   badvalue     — an unknown component fails the render with the helper's message.
 #   namebudget   — a sliced render fails when the TI name would exceed 63 chars;
@@ -30,10 +31,16 @@
 #                  namespace name and the tenant label: a namespace name reused by
 #                  another tenant gets nothing.
 #   mountagree   — the auth mount path agrees across the AuthEngineMount, its
-#                  config, every role and VAULT_K8S_MOUNT; VAULT_NAMESPACE is empty.
-#   guards       — every misconfigured ServiceAccount gets an error ConfigMap and
-#                  nothing else; the correct ones in another namespace still
-#                  render; hostile values never reach a spec.
+#                  config, every role, the SecretStores and VAULT_K8S_MOUNT;
+#                  VAULT_NAMESPACE is empty.
+#   storepath    — every SecretStore reads the tenant's mount <tenant>/kv, KV v2,
+#                  with no Vault namespace; every ExternalSecret key is relative
+#                  to that mount; with ESO off install-wide, a Deployment asking
+#                  for a secret gets a deploy-error and nothing else.
+#   guards       — every misconfigured ServiceAccount or Deployment gets an error
+#                  ConfigMap and nothing else; the correct ones in another
+#                  namespace still render; identical asks are deduped, clashing
+#                  ones refused; hostile values never reach a spec.
 #   tokenseconds — token durations are integers on every role; a duration string
 #                  fails the render with the schema removed, and the schema
 #                  rejects it too.
@@ -204,6 +211,14 @@ diff "$WORK/union.ids" "$WORK/all.ids" > /dev/null \
   && check union 0 \
   || check union 1 "core ∪ eso ≠ all: $(diff "$WORK/union.ids" "$WORK/all.ids" | head -4 | tr '\n' ' ')"
 
+# exclusivity
+ex_ok=0; ex_detail=""
+eso_in_eso="$(grep -c '^apiVersion: external-secrets\.io/' "$WORK/eso.yaml" || true)"
+eso_in_core="$(grep -c '^apiVersion: external-secrets\.io/' "$WORK/core.yaml" || true)"
+[ "$eso_in_eso" -gt 0 ] || { ex_ok=1; ex_detail="$ex_detail external-secrets.io missing from eso;"; }
+[ "$eso_in_core" -eq 0 ] || { ex_ok=1; ex_detail="$ex_detail external-secrets.io leaked into core ($eso_in_core);"; }
+check exclusivity "$ex_ok" "$ex_detail"
+
 # empty
 if render eso "$FIXTURES/values-no-optins.yaml" > "$WORK/empty.yaml" 2>"$WORK/empty.err"; then
   # yqs, not `yq | grep -c || true`: a yq failure then stops the run instead of
@@ -334,7 +349,8 @@ yqs m_auth 'select(.kind == "AuthEngineMount" and .spec.type == "kubernetes") | 
 yqs m_cfg 'select(.kind == "KubernetesAuthEngineConfig") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
 yqs m_roles 'select(.kind == "KubernetesAuthEngineRole") | .spec.path' "$WORK/all.raw"
 yqs m_cms 'select(.kind == "ConfigMap" and (.data | has("VAULT_K8S_MOUNT"))) | .data.VAULT_K8S_MOUNT' "$WORK/all.raw"
-for pair in "AuthEngineMount:$m_auth" "KubernetesAuthEngineConfig:$m_cfg" "roles:$(sort -u <<<"$m_roles")" "VAULT_K8S_MOUNT:$(sort -u <<<"$m_cms")"; do
+yqs m_stores 'select(.kind == "SecretStore") | .spec.provider.vault.auth.kubernetes.mountPath' "$WORK/all.raw"
+for pair in "AuthEngineMount:$m_auth" "KubernetesAuthEngineConfig:$m_cfg" "roles:$(sort -u <<<"$m_roles")" "SecretStores:$(sort -u <<<"$m_stores")" "VAULT_K8S_MOUNT:$(sort -u <<<"$m_cms")"; do
   [ "${pair#*:}" = team-a/kubernetes/workloads ] || { ma_ok=1; ma_detail="$ma_detail [${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
 done
 yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-")) and (.data | has("VAULT_K8S_MOUNT"))) | .metadata.name + "=" + (.data.VAULT_NAMESPACE | tostring)' "$WORK/all.raw"
@@ -342,6 +358,30 @@ yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-"
 bad="$(grep -v '=$' <<<"$vns" || true)"
 [ -z "$bad" ] || { ma_ok=1; ma_detail="$ma_detail [VAULT_NAMESPACE not empty: $(tr '\n' ' ' <<<"$bad")]"; }
 check mountagree "$ma_ok" "$ma_detail"
+
+# storepath
+sp_ok=0; sp_detail=""
+yqs stores 'select(.kind == "SecretStore") | .metadata.name + " " + .spec.provider.vault.path + " " + .spec.provider.vault.version + " " + (.spec.provider.vault | has("namespace") | tostring)' "$WORK/all.raw"
+[ -n "$stores" ] || { sp_ok=1; sp_detail="$sp_detail [no SecretStore rendered — the check proves nothing]"; }
+while read -r name path version hasns; do
+  [ "$path $version $hasns" = "team-a/kv v2 false" ] || sp_detail="$sp_detail [$name: path $path, version $version, namespace field $hasns]"
+done <<<"$stores"
+yqs eskeys 'select(.kind == "ExternalSecret") | .metadata.name + " " + ((.spec.data[0].remoteRef.key) // (.spec.dataFrom[0].extract.key))' "$WORK/all.raw"
+[ -n "$eskeys" ] || { sp_ok=1; sp_detail="$sp_detail [no ExternalSecret rendered — the check proves nothing]"; }
+while read -r name key; do
+  case "$key" in
+    dev/team-a-dev/payments/*) ;;
+    *) sp_detail="$sp_detail [$name reads $key, not relative to the tenant mount under dev/team-a-dev/payments/]" ;;
+  esac
+done <<<"$eskeys"
+render all "$FIXTURES/values-full.yaml" --set eso=disabled > "$WORK/eso-off.yaml" 2>"$WORK/eso-off.err" \
+  || sp_detail="$sp_detail [eso=disabled did not render: $(first "$WORK/eso-off.err")]"
+yqs esooff 'select(.apiVersion | test("^external-secrets")) | .kind + "/" + .metadata.name' "$WORK/eso-off.yaml"
+[ -z "$esooff" ] || sp_detail="$sp_detail [eso=disabled still renders $(tr '\n' ' ' <<<"$esooff")]"
+yqs esoerr 'select(.kind == "ConfigMap" and .metadata.name == "vault-config-web.deploy-error") | .data.ERROR' "$WORK/eso-off.yaml"
+grep -q 'External Secrets Operator is disabled' <<<"$esoerr" || sp_detail="$sp_detail [eso=disabled: no deploy-error for web]"
+[ -z "$sp_detail" ] || sp_ok=1
+check storepath "$sp_ok" "$sp_detail"
 
 # guards
 gd_ok=0; gd_detail=""
@@ -364,6 +404,18 @@ for sa in good-sa hostile-sa; do
   yqs hit "select(.kind == \"Policy\" and .metadata.name == \"kv.team-a.team-a-prod.$sa\") | .metadata.name" "$WORK/fx-guards.raw"
   [ -n "$hit" ] \
     || { gd_ok=1; gd_detail="$gd_detail [$sa: correct SA rendered no Policy — one namespace's error froze another]"; }
+done
+# Deployment-level cases.
+es_count() { local es; yqs es "select(.kind == \"ExternalSecret\" and .metadata.name == \"$1\") | .metadata.name" "$WORK/fx-guards.raw"; lines "$es"; }
+[ "$(es_count good-sa-db)" = 1 ] || { gd_ok=1; gd_detail="$gd_detail [identical asks were not deduped to ONE ExternalSecret]"; }
+[ "$(es_count good-sa-cfg)" = 0 ] || { gd_ok=1; gd_detail="$gd_detail [clashing asks rendered an ExternalSecret]"; }
+for pair in "d-clash-a:ask for different secrets" "d-clash-b:ask for different secrets" "d-no-sa:requires spec.template.spec.serviceAccountName" \
+  "d-misplaced:is read on the ServiceAccount" "d-ghost-sa:does not exist in namespace" "d-no-kv:needs KV access" \
+  "d-unknown:unknown annotation" "d-evil-key:field selector" "d-evil-leaf:is not a valid secret reference" "d-evil-name:names the Kubernetes Secret"; do
+  d="${pair%%:*}"; msg="${pair#*:}"
+  yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$d.deploy-error\") | .data.ERROR" "$WORK/fx-guards.raw"
+  grep -q -- "$msg" <<<"$err" \
+    || { gd_ok=1; gd_detail="$gd_detail [$d: no deploy-error ConfigMap saying '$msg']"; }
 done
 # Hostile values never reach a rendered spec, and the error ConfigMap cannot be forged.
 yqs strs 'select(.kind != "ConfigMap") | .. | select(tag == "!!str")' "$WORK/fx-guards.raw"

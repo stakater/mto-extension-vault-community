@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -685,6 +686,53 @@ spec:
 			}
 			return ""
 		})
+	})
+
+	step("eso: a Deployment gets its secret from Vault", func(t *testing.T) {
+		// AC-DEL-1. The SecretStore reads the tenant's mount e2e-alpha/kv as web,
+		// and the ExternalSecret's key is relative to it.
+		createDeployment(t, alphaNS, "web", "web", map[string]string{
+			annPrefix + "kv-secret.db": "db#password",
+		}, []corev1.EnvVar{secretEnv("PASSWORD", "web-db", "password")})
+		waitFor(t, "ExternalSecret web-db synced", func() string {
+			if v := secretValue(t, alphaNS, "web-db", "password"); v != "v1" {
+				o := get(t, gvrExternalSecret, alphaNS, "web-db")
+				if o == nil {
+					return "ExternalSecret absent"
+				}
+				s, msg := condition(o, "Ready")
+				return fmt.Sprintf("Secret password=%q; ExternalSecret Ready=%q %s", v, s, msg)
+			}
+			return ""
+		})
+		waitFor(t, "the web pod sees PASSWORD=v1", func() string {
+			p := runningPod(t, alphaNS, "web")
+			if p == "" {
+				return "no single ready pod"
+			}
+			if v, err := podEnv(t, alphaNS, p, "PASSWORD"); err != nil {
+				return err.Error()
+			} else if v != "v1" {
+				return "PASSWORD=" + v
+			}
+			return ""
+		})
+	})
+
+	step("eso: a whole secret becomes one Kubernetes Secret", func(t *testing.T) {
+		// kv-secret.<name>: <leaf> with no #key copies every key of the leaf.
+		if err := kvPut(t, webToken, alpha, appPath(alphaNS, "web", "cfg"), "host=db.internal", "port=5432"); err != nil {
+			t.Fatalf("editor could not write the leaf: %v", err)
+		}
+		createDeployment(t, alphaNS, "cfg-reader", "web", map[string]string{annPrefix + "kv-secret.cfg": "cfg"}, nil)
+		waitFor(t, "Secret web-cfg holds every key of the leaf", func() string {
+			host, port := secretValue(t, alphaNS, "web-cfg", "host"), secretValue(t, alphaNS, "web-cfg", "port")
+			if host != "db.internal" || port != "5432" {
+				return fmt.Sprintf("host=%q port=%q", host, port)
+			}
+			return ""
+		})
+		deleteDeployment(t, alphaNS, "cfg-reader")
 	})
 
 	step("isolation: a namespace name reused by another tenant gets nothing", func(t *testing.T) {

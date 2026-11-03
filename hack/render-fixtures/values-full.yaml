@@ -66,13 +66,18 @@ serviceAccounts:
       namespace: team-a-dev
 
 deployments:
+  # Exercises kv-secret.<name>, with and without #key.
   - metadata:
       name: web
       namespace: team-a-dev
+      annotations:
+        vault.stakater.com/kv-secret.web-db: "db-creds#password"
+        vault.stakater.com/kv-secret.web-cfg: "app-config"
     spec:
       template:
         spec:
           serviceAccountName: app-a
+  # No annotations → no ExternalSecrets for this deployment.
   - metadata:
       name: worker
       namespace: team-a-tools

@@ -40,6 +40,8 @@ serviceAccounts:
   - metadata: { name: g-bad-bool, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "ture", vault.stakater.com/role: editor } }
   # app named but kv off — registers nothing
   - metadata: { name: g-app-only, namespace: team-a-dev, annotations: { vault.stakater.com/app: payments } }
+  # no vault annotation: a Deployment asking a secret through it gets nothing
+  - metadata: { name: plain-sa, namespace: team-a-dev }
   # correct, and in another namespace
   - metadata: { name: good-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor } }
   # dotted ServiceAccount name — legal in Kubernetes, rejected because every
@@ -47,4 +49,37 @@ serviceAccounts:
   - metadata: { name: g.dotted, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: payments } }
   # a correct ServiceAccount whose app is the word "no" (a YAML boolean when unquoted)
   - metadata: { name: hostile-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: "no" } }
-deployments: []
+deployments:
+  # two Deployments, one ServiceAccount, identical ask -> ONE ExternalSecret
+  - metadata: { name: d-dedupe-a, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.db: postgres } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  - metadata: { name: d-dedupe-b, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.db: postgres } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  # same name, different ask -> rejected on both
+  - metadata: { name: d-clash-a, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.cfg: one } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  - metadata: { name: d-clash-b, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.cfg: two } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  # annotated but no serviceAccountName
+  - metadata: { name: d-no-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.x: y } }
+    spec: { template: { spec: {} } }
+  # ServiceAccount-only annotation placed on a Deployment
+  - metadata: { name: d-misplaced, namespace: team-a-prod, annotations: { vault.stakater.com/app: payments } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  # the ServiceAccount does not exist
+  - metadata: { name: d-ghost-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.x: "leaf" } }
+    spec: { template: { spec: { serviceAccountName: ghost } } }
+  # the ServiceAccount has no KV grant
+  - metadata: { name: d-no-kv, namespace: team-a-dev, annotations: { vault.stakater.com/kv-secret.x: "leaf" } }
+    spec: { template: { spec: { serviceAccountName: plain-sa } } }
+  # unknown Deployment key
+  - metadata: { name: d-unknown, namespace: team-a-prod, annotations: { vault.stakater.com/secret.db: postgres } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  # hostile values — each must land in an error ConfigMap, never in a rendered
+  # spec, and must not be able to forge fields anywhere (incl. the error CM)
+  - metadata: { name: d-evil-key, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.ok: "leaf#bad\nspec: forged" } }
+    spec: { template: { spec: { serviceAccountName: hostile-sa } } }
+  - metadata: { name: d-evil-leaf, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.trav: "../../team-a-dev/other/creds" } }
+    spec: { template: { spec: { serviceAccountName: hostile-sa } } }
+  - metadata: { name: d-evil-name, namespace: team-a-prod, annotations: { vault.stakater.com/kv-secret.My_Secret: "x" } }
+    spec: { template: { spec: { serviceAccountName: hostile-sa } } }

@@ -96,13 +96,14 @@ families. Satisfies **AC-ISO-7**, **AC-ISO-11**, **AC-ISO-12**,
 **AC-LIFE-4**. Planning:
 [`planning/C3-vco-cant-widen-itself.md`](planning/C3-vco-cant-widen-itself.md).
 
-**Story C.4 — Delivery through External Secrets Operator** 👍 *Approved*
+**Story C.4 — Delivery through External Secrets Operator** ✅ *Done*
 
 As an application team, I want a Deployment annotation to become a Kubernetes
 Secret, so that my code never calls Vault.
 
 Done: slice `eso` ported with `path: <tenant>/kv` and no namespace; live: the
-pod sees the value. Satisfies **AC-DEL-1**.
+pod sees the value. Satisfies **AC-DEL-1**. Planning:
+[`planning/C4-delivery-through-eso.md`](planning/C4-delivery-through-eso.md).
 
 **Story C.5 — Contract parity with Enterprise** 👍 *Approved*
 

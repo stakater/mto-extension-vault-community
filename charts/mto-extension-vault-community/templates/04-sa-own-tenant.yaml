@@ -4,6 +4,8 @@ Section 4 (own-tenant) — per annotated ServiceAccount:
   - KubernetesAuthEngineRole same name             on auth/<tenant>/kubernetes/workloads,
                                                    bound to the SA, its namespace by name and tenant label
   - ConfigMap vault-config-<sa>                    VAULT_* env for SDK consumers
+  - SecretStore <sa>-vault                         for ESO consumers (eso=enabled), on the
+                                                   tenant's mount <tenant>/kv, no Vault namespace
 
 A ServiceAccount carrying no `vault.stakater.com/` annotation renders nothing.
 One carrying an annotation the chart cannot honour renders a single ConfigMap
@@ -20,8 +22,11 @@ Vault Community has no namespaces: every path starts with the tenant, and the
 policy is the only wall between tenants. Every policy passes the scope check
 (vault.assertPolicyScope) before it is rendered.
 */}}
+{{- /* Two components share this file's per-SA loop and validations: core
+       emits Policy/Role/ConfigMap, eso emits the SecretStore. */ -}}
 {{- $renderCore := include "vault.componentEnabled" (dict "component" "core" "ctx" .) }}
-{{- if $renderCore }}
+{{- $renderEso := include "vault.componentEnabled" (dict "component" "eso" "ctx" .) }}
+{{- if or $renderCore $renderEso }}
 {{- $tenant := required ".Values.tenant must be set by the parent" .Values.tenant }}
 {{- $env := .Values.env }}
 {{- $labels := include "vault.labels" . }}
@@ -45,8 +50,10 @@ policy is the only wall between tenants. Every policy passes the scope check
 {{- $m := index $idxErrs $saNs | default (dict) }}
 {{- $_ := set $m $saName (printf "error: Vault annotations rejected — see ConfigMap vault-config-%s.error in this namespace" $saName) }}
 {{- $_ := set $idxErrs $saNs $m }}
+{{- if $renderCore }}
 ---
 {{ include "vault.errorConfigMap" (dict "name" (printf "vault-config-%s.error" $saName) "ns" $saNs "labels" $labels "subject" (printf "ServiceAccount %s/%s" $saNs $saName) "errors" $f.errors) }}
+{{- end }}
 {{- else if and $saName $saNs $f.kvOn }}
 {{- $roleName := include "vault.roleName" (dict "tenant" $tenant "saNs" $saNs "saName" $saName) }}
 {{- $entry := printf "serviceAccount: %q\nrole: %q\nkvPath: %s/data/%s/%s/%s/" $saName $role $kv $env $saNs $app }}
@@ -70,6 +77,7 @@ policy is the only wall between tenants. Every policy passes the scope check
 {{- end }}
 {{- $body := join "\n" $policy }}
 {{- include "vault.assertPolicyScope" (dict "name" $roleName "policy" $body "ctx" $) }}
+{{- if $renderCore }}
 ---
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: Policy
@@ -141,11 +149,40 @@ data:
 {{ $.Values.vaultCABundle | indent 4 }}
 {{- end }}
 {{- end }}
+{{- if and $renderEso (eq $.Values.eso "enabled") }}
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: {{ $saName }}-vault
+  namespace: {{ $saNs }}
+  labels:
+    {{- $labels | nindent 4 }}
+    vault.stakater.com/app: {{ $app | quote }}
+spec:
+  provider:
+    vault:
+      server: {{ $.Values.vaultServer }}
+      {{- if $.Values.vaultCABundle }}
+      caBundle: {{ $.Values.vaultCABundle | b64enc | quote }}
+      {{- end }}
+      {{- /* The tenant's mount, and no namespace: Vault Community has one. */}}
+      path: {{ $kv }}
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: {{ $k8sMount }}
+          role: {{ $roleName }}
+          serviceAccountRef:
+            name: {{ $saName }}
+{{- end }}
+{{- end }}
 {{- end }}
 {{- /* One per workload namespace with an annotated ServiceAccount: the
        app -> path directory a seeder reads instead of hopping Deployment ->
        serviceAccountName -> vault-config-<sa>. A signpost, never an input —
        editing it changes no access. */ -}}
+{{- if $renderCore }}
 {{- $idxNs := dict }}
 {{- range $ns, $_x := $idxHealthy }}{{- $_ := set $idxNs $ns true }}{{- end }}
 {{- range $ns, $_x := $idxErrs }}{{- $_ := set $idxNs $ns true }}{{- end }}
@@ -173,5 +210,6 @@ data:
   {{ printf "%s.error" $errSa | quote }}: |
     {{- $entry | nindent 4 }}
   {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
