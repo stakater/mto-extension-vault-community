@@ -1,0 +1,100 @@
+{{/*
+Section 4b (share-in) — per `vault.stakater.com/kv-import-tenant: <peer-1>,<peer-2>`
+entry, a Policy + Role pair granting the SA read access to
+<shared>/kv/data/<env>/from-<peer>/to-<own-tenant>/*, plus an ESO SecretStore
+wired to that role (eso=enabled), reading the shared mount <shared>/kv.
+
+The role lives on the tenant's own auth mount (ADR-0007): the SecretStore logs
+in there, with the share-in role.
+*/}}
+{{- /* Two components share this file's per-SA/per-peer loop: core emits the
+       Policy/Role pair, eso emits the SecretStore. */ -}}
+{{- $renderCore := include "vault.componentEnabled" (dict "component" "core" "ctx" .) }}
+{{- $renderEso := include "vault.componentEnabled" (dict "component" "eso" "ctx" .) }}
+{{- if or $renderCore $renderEso }}
+{{- $tenant := required ".Values.tenant must be set by the parent" .Values.tenant }}
+{{- $env := .Values.env }}
+{{- $shared := .Values.sharedTenant.name }}
+{{- $labels := include "vault.labels" . }}
+{{- $k8sMount := include "vault.k8sAuthMount" . }}
+{{- $tenantNamespaces := include "vault.tenantNamespaces" . | fromYaml }}
+{{- $appClaims := include "vault.appClaims" . | fromYaml }}
+{{- range $sa := (ternary .Values.serviceAccounts (list) (kindIs "slice" .Values.serviceAccounts)) }}
+{{- $f := include "vault.saFacts" (dict "sa" $sa "ctx" $ "tenantNamespaces" $tenantNamespaces "appClaims" $appClaims) | fromYaml }}
+{{- $saName := $f.name }}
+{{- $saNs := $f.ns }}
+{{- $importRaw := dig "metadata" "annotations" "vault.stakater.com/kv-import-tenant" "" $sa }}
+{{- if and $f.kvOn (not $f.errors) $saName $saNs $importRaw }}
+{{- range $peer := splitList "," $importRaw }}
+{{- $peer = trim $peer }}
+{{- if include "vault.peerEmittable" (dict "peer" $peer "knownCsv" $.Values.knownTenants) }}
+{{- $shareInName := include "vault.shareInName" (dict "tenant" $tenant "saNs" $saNs "saName" $saName "peer" $peer) }}
+{{- $body := join "\n" (list
+      (printf "path \"%s/kv/data/%s/from-%s/to-%s/*\"     { capabilities = [\"read\", \"list\"] }" $shared $env $peer $tenant)
+      (printf "path \"%s/kv/metadata/%s/from-%s/to-%s/*\" { capabilities = [\"read\", \"list\"] }" $shared $env $peer $tenant)) }}
+{{- include "vault.assertPolicyScope" (dict "name" $shareInName "policy" $body "ctx" $) }}
+{{- if $renderCore }}
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: {{ $shareInName }}
+  namespace: {{ $.Values.configNamespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  {{- include "vault.vcoAuth" $ | nindent 2 }}
+  name: {{ $shareInName }}
+  policy: |
+    {{- $body | nindent 4 }}
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: {{ $shareInName }}
+  namespace: {{ $.Values.configNamespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  {{- include "vault.vcoAuth" $ | nindent 2 }}
+  name: {{ $shareInName }}
+  path: {{ $k8sMount }}
+  targetServiceAccounts:
+    - {{ $saName }}
+  {{- include "vault.roleNamespaces" (dict "ns" $saNs "ctx" $) | nindent 2 }}
+  policies:
+    - {{ $shareInName }}
+  {{- include "vault.roleTokenFields" $ | nindent 2 }}
+{{- end }}
+{{- if and $renderEso (eq $.Values.eso "enabled") }}
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: {{ $saName }}.share-{{ $peer }}-vault
+  namespace: {{ $saNs }}
+  labels:
+    {{- $labels | nindent 4 }}
+    vault.stakater.com/app: {{ $f.app | quote }}
+spec:
+  provider:
+    vault:
+      server: {{ $.Values.vaultServer }}
+      {{- if $.Values.vaultCABundle }}
+      caBundle: {{ $.Values.vaultCABundle | b64enc | quote }}
+      {{- end }}
+      {{- /* The shared mount, and no namespace: Vault Community has one. */}}
+      path: {{ printf "%s/kv" $shared }}
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: {{ $k8sMount }}
+          role: {{ $shareInName }}
+          serviceAccountRef:
+            name: {{ $saName }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -154,7 +154,7 @@ read, an unsubscribed namespace is refused. Satisfies **AC-SHR-1**,
 **AC-SHR-2**. Planning:
 [`planning/C7-sharing-inside-a-tenant.md`](planning/C7-sharing-inside-a-tenant.md).
 
-**Story C.8 — Sharing across tenants** 👍 *Approved*
+**Story C.8 — Sharing across tenants** ✅ *Done*
 
 As an application team, I want to export secrets to a named peer tenant, and a
 peer to import them, so that two tenants exchange data without reaching each
@@ -166,7 +166,8 @@ Done: share-out and share-in policies and roles on the tenant's own
 the share direction in the scope check and the admission policies; the
 `kv-import.<name>` Deployment annotation with its share SecretStore; live: the
 exporter writes, the importer reads through ESO, the reverse direction and a
-third tenant are refused. Satisfies **AC-SHR-3**.
+third tenant are refused. Satisfies **AC-SHR-3**. Planning:
+[`planning/C8-sharing-across-tenants.md`](planning/C8-sharing-across-tenants.md).
 
 **Story C.9 — Lifecycle that keeps data** 👍 *Approved*
 

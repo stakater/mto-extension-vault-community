@@ -122,6 +122,35 @@ a rename.
 {{- include "vault.assertName" (printf "kv.%s.%s.%s" .tenant .saNs .saName) -}}
 {{- end -}}
 
+{{/* Cross-tenant share-out role/policy name: share.<tenant>.<saNs>.<sa>.out.<peer>. */}}
+{{- define "vault.shareOutName" -}}
+{{- include "vault.assertName" (printf "share.%s.%s.%s.out.%s" .tenant .saNs .saName .peer) -}}
+{{- end -}}
+
+{{/* Cross-tenant share-in role/policy name: share.<tenant>.<saNs>.<sa>.in.<peer>. */}}
+{{- define "vault.shareInName" -}}
+{{- include "vault.assertName" (printf "share.%s.%s.%s.in.%s" .tenant .saNs .saName .peer) -}}
+{{- end -}}
+
+{{/*
+Returns "true" when a cross-tenant share to .peer should be rendered: .peer is
+non-empty AND either .knownCsv is empty (no roster supplied, filtering off) or
+.peer is in it. Skipping an unknown peer avoids a dangling Policy/Role for a
+tenant that does not exist; the share self-heals when that tenant appears.
+*/}}
+{{- define "vault.peerEmittable" -}}
+{{- $peer := .peer -}}
+{{- $csv := toString (.knownCsv | default "") -}}
+{{- if not $peer -}}
+{{- else if not (trim $csv) -}}
+true
+{{- else -}}
+{{- $known := list -}}
+{{- range $t := splitList "," $csv -}}{{- $known = append $known (trim $t) -}}{{- end -}}
+{{- if has $peer $known -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 The spec.authentication block of every VCO CR. Vault Community has one
 namespace, so there is no namespace and no targetNamespace: VCO logs in at
@@ -175,6 +204,7 @@ Usage: {{ include "vault.assertPolicyScope" (dict "name" $name "policy" $body "c
 {{- $fam := index $parts 0 -}}
 {{- $t := toString .ctx.Values.tenant -}}
 {{- $env := toString .ctx.Values.env -}}
+{{- $shared := toString .ctx.Values.sharedTenant.name -}}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $env) -}}
 {{- fail (printf "env %q is not a DNS label: it is a segment of every policy path" $env) -}}
 {{- end -}}
@@ -186,9 +216,9 @@ Usage: {{ include "vault.assertPolicyScope" (dict "name" $name "policy" $body "c
 {{- if or (eq $fam "kv") (eq $fam "sso") -}}
 {{- $scope = printf "^%s/kv/(data|metadata|delete|undelete|destroy)/%s/([a-z0-9_][-a-z0-9_.]*/)*[*]$" $t $env -}}
 {{- else if and (eq $fam "share") (eq (len $parts) 6) (eq (index $parts 4) "out") -}}
-{{- $scope = printf "^shared/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $env $t (index $parts 5) -}}
+{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $shared $env $t (index $parts 5) -}}
 {{- else if and (eq $fam "share") (eq (len $parts) 6) (eq (index $parts 4) "in") -}}
-{{- $scope = printf "^shared/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $env (index $parts 5) $t -}}
+{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $shared $env (index $parts 5) $t -}}
 {{- else -}}
 {{- fail (printf "scope check: policy %q is in no name family (kv. 4 parts, share. 6, sso. 3)" $name) -}}
 {{- end -}}
@@ -306,7 +336,9 @@ annotation must be added here too, or it is rejected as unknown — loud, and th
 safe direction to fail.
 */}}
 {{- define "vault.saAnnotationKeys" -}}
-{{- $keys := list "kv" "role" "app" "kv-subscribe-ns" -}}
+{{- $keys := list
+      "kv" "role" "app"
+      "kv-subscribe-ns" "kv-export-tenant" "kv-import-tenant" -}}
 {{- toYaml $keys -}}
 {{- end -}}
 
@@ -427,7 +459,7 @@ tenant and freeze unrelated namespaces.
 {{- end -}}
 
 {{- /* A sharing annotation with KV off grants nothing. */ -}}
-{{- range $k := list "kv-subscribe-ns" -}}
+{{- range $k := list "kv-subscribe-ns" "kv-export-tenant" "kv-import-tenant" -}}
 {{- if and (dig "metadata" "annotations" (printf "%s%s" $p $k) "" $sa) (not $kvOn) -}}
 {{- $errs = append $errs (printf "%s%s is set but %skv is not \"true\", so it grants nothing" $p $k $p) -}}
 {{- end -}}

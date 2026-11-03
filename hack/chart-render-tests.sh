@@ -37,6 +37,10 @@
 #                  with no Vault namespace; every ExternalSecret key is relative
 #                  to that mount; with ESO off install-wide, a Deployment asking
 #                  for a secret gets a deploy-error and nothing else.
+#   shares       — an export policy writes only shared/kv/…/from-<t>/to-<peer>/,
+#                  an import policy reads only …/from-<peer>/to-<t>/; both roles
+#                  live on the tenant's own mount (ADR-0007); the import store
+#                  reads shared/kv; the ConfigMap's share namespaces are empty.
 #   subread      — a kv-subscribe-ns grant is read-only on the producer's prefix,
 #                  on the metadata path too; an audit-read subscriber lists only.
 #   guards       — every misconfigured ServiceAccount or Deployment gets an error
@@ -388,13 +392,14 @@ sp_ok=0; sp_detail=""
 yqs stores 'select(.kind == "SecretStore") | .metadata.name + " " + .spec.provider.vault.path + " " + .spec.provider.vault.version + " " + (.spec.provider.vault | has("namespace") | tostring)' "$WORK/all.raw"
 [ -n "$stores" ] || { sp_ok=1; sp_detail="$sp_detail [no SecretStore rendered — the check proves nothing]"; }
 while read -r name path version hasns; do
-  [ "$path $version $hasns" = "team-a/kv v2 false" ] || sp_detail="$sp_detail [$name: path $path, version $version, namespace field $hasns]"
+  want_path=team-a/kv; case "$name" in *.share-*) want_path=shared/kv ;; esac
+  [ "$path $version $hasns" = "$want_path v2 false" ] || sp_detail="$sp_detail [$name: path $path, version $version, namespace field $hasns]"
 done <<<"$stores"
 yqs eskeys 'select(.kind == "ExternalSecret") | .metadata.name + " " + ((.spec.data[0].remoteRef.key) // (.spec.dataFrom[0].extract.key))' "$WORK/all.raw"
 [ -n "$eskeys" ] || { sp_ok=1; sp_detail="$sp_detail [no ExternalSecret rendered — the check proves nothing]"; }
 while read -r name key; do
   case "$key" in
-    dev/team-a-dev/payments/*|dev/_shared/from-team-a-tools/*) ;;
+    dev/team-a-dev/payments/*|dev/_shared/from-team-a-tools/*|dev/from-team-b/to-team-a/*) ;;
     *) sp_detail="$sp_detail [$name reads $key, not relative to the tenant mount under dev/team-a-dev/payments/]" ;;
   esac
 done <<<"$eskeys"
@@ -406,6 +411,27 @@ yqs esoerr 'select(.kind == "ConfigMap" and .metadata.name == "vault-config-web.
 grep -q 'External Secrets Operator is disabled' <<<"$esoerr" || sp_detail="$sp_detail [eso=disabled: no deploy-error for web]"
 [ -z "$sp_detail" ] || sp_ok=1
 check storepath "$sp_ok" "$sp_detail"
+
+# shares
+sh_ok=0; sh_detail=""
+pol() { "$YQ" e -N "select(.kind == \"Policy\" and .metadata.name == \"$1\") | .spec.policy" "$WORK/all.raw"; }
+out_pol="$(pol share.team-a.team-a-dev.app-a.out.team-b)"; in_pol="$(pol share.team-a.team-a-dev.app-a.in.team-b)"
+want_out='path "shared/kv/data/dev/from-team-a/to-team-b/*"     { capabilities = ["create", "read", "update", "list"] }
+path "shared/kv/metadata/dev/from-team-a/to-team-b/*" { capabilities = ["create", "read", "update", "list"] }'
+want_in='path "shared/kv/data/dev/from-team-b/to-team-a/*"     { capabilities = ["read", "list"] }
+path "shared/kv/metadata/dev/from-team-b/to-team-a/*" { capabilities = ["read", "list"] }'
+[ "$out_pol" = "$want_out" ] || { sh_ok=1; sh_detail="$sh_detail [export policy: $(tr '\n' '|' <<<"$out_pol")]"; }
+[ "$in_pol" = "$want_in" ] || { sh_ok=1; sh_detail="$sh_detail [import policy: $(tr '\n' '|' <<<"$in_pol")]"; }
+yqs shroles 'select(.kind == "KubernetesAuthEngineRole" and (.metadata.name | test("^share[.]"))) | .metadata.name + " " + .spec.path' "$WORK/all.raw"
+[ "$(lines "$shroles")" = 2 ] || { sh_ok=1; sh_detail="$sh_detail [want 2 share roles, got: $(tr '\n' '|' <<<"$shroles")]"; }
+grep -v ' team-a/kubernetes/workloads$' <<<"$shroles" | grep -q . && { sh_ok=1; sh_detail="$sh_detail [a share role is not on the tenant's own mount: $(tr '\n' '|' <<<"$shroles")]"; }
+yqs shns 'select(.kind == "ConfigMap" and .metadata.name == "vault-config-app-a") | .data | to_entries | .[] | select(.key | test("^VAULT_(OUT|IN)_.*_NAMESPACE$")) | .key + "=" + .value' "$WORK/all.raw"
+[ "$(sort <<<"$shns" | tr '\n' ' ')" = "VAULT_IN_TEAM_B_NAMESPACE= VAULT_OUT_TEAM_B_NAMESPACE= " ] || { sh_ok=1; sh_detail="$sh_detail [share namespaces in the ConfigMap: '$(tr '\n' ' ' <<<"$shns")']"; }
+# An off-roster peer renders nothing; the share self-heals when it appears.
+render all "$FIXTURES/values-full.yaml" --set knownTenants=team-a > "$WORK/sh-roster.yaml" 2>"$WORK/sh.err" || { sh_ok=1; sh_detail="$sh_detail [render with a roster without team-b failed: $(first "$WORK/sh.err")]"; }
+yqs shoff 'select(.metadata.name | test("share")) | .kind + "/" + .metadata.name' "$WORK/sh-roster.yaml"
+[ -z "$shoff" ] || { sh_ok=1; sh_detail="$sh_detail [shares to an off-roster peer rendered: $(tr '\n' ' ' <<<"$shoff")]"; }
+check shares "$sh_ok" "$sh_detail"
 
 # subread — app-a (editor) subscribes to team-a-tools; app-d (audit-read) to team-a-dev
 sr_ok=0; sr_detail=""
@@ -437,7 +463,8 @@ for pair in \
   "g-reserved:is not a valid app name" "g-claimed:claimed by more than one" "g-claimer:claimed by more than one" \
   "default:cannot be granted Vault access" "g-unknown-key:unknown annotation" "g-bad-bool:must be" \
   "g-app-only:no app identity is registered" "g.dotted:cannot be used with Vault" \
-  "g-foreign-ns:is not a namespace of tenant" "g-orphan-sub:so it grants nothing"; do
+  "g-foreign-ns:is not a namespace of tenant" "g-orphan-sub:so it grants nothing" \
+  "g-orphan-share:so it grants nothing" "g-share-err:is not a known role"; do
   sa="${pair%%:*}"; msg="${pair#*:}"
   yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$sa.error\") | .data.ERROR" "$WORK/fx-guards.raw"
   grep -q -- "$msg" <<<"$err" \
@@ -446,6 +473,10 @@ for pair in \
   [ -n "$hit" ] \
     && { gd_ok=1; gd_detail="$gd_detail [$sa: a Policy rendered despite the error]"; }
 done
+# The share templates' own error gate: a rejected ServiceAccount with share
+# annotations gets no share Policy, Role or SecretStore.
+yqs sharehit 'select(.metadata.name | test("g-share-err")) | select(.kind != "ConfigMap") | .kind + "/" + .metadata.name' "$WORK/fx-guards.raw"
+[ -z "$sharehit" ] || { gd_ok=1; gd_detail="$gd_detail [a rejected ServiceAccount still got share objects: $(tr '\n' ' ' <<<"$sharehit")]"; }
 # Positive controls in the other namespace.
 for sa in good-sa hostile-sa sub-ok; do
   yqs hit "select(.kind == \"Policy\" and .metadata.name == \"kv.team-a.team-a-prod.$sa\") | .metadata.name" "$WORK/fx-guards.raw"
@@ -462,6 +493,7 @@ es_count() { local es; yqs es "select(.kind == \"ExternalSecret\" and .metadata.
 for pair in "d-clash-a:ask for different secrets" "d-clash-b:ask for different secrets" "d-no-sa:requires spec.template.spec.serviceAccountName" \
   "d-misplaced:is read on the ServiceAccount" "d-ghost-sa:does not exist in namespace" "d-no-kv:needs KV access" \
   "d-sub-nogrant:does not list it in" "d-sub-foreign:is not a namespace of tenant" \
+  "d-imp-bad:not in the tenant roster" "d-imp-nogrant:does not list it in" \
   "d-unknown:unknown annotation" "d-evil-key:field selector" "d-evil-leaf:is not a valid secret reference" "d-evil-name:names the Kubernetes Secret"; do
   d="${pair%%:*}"; msg="${pair#*:}"
   yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$d.deploy-error\") | .data.ERROR" "$WORK/fx-guards.raw"

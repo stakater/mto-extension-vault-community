@@ -18,6 +18,8 @@ by namespaceSelector matchLabels { <tenantLabelKey>: <tenant> }.
   vault.stakater.com/role              required with kv: viewer | editor | admin | audit-read
   vault.stakater.com/app               optional: the app that owns the KV prefix (default: SA name)
   vault.stakater.com/kv-subscribe-ns   intra-tenant: CSV of writer namespaces, read-only
+  vault.stakater.com/kv-export-tenant  cross-tenant share-out: CSV of peer tenants
+  vault.stakater.com/kv-import-tenant  cross-tenant share-in: CSV of peer tenants
 
 Vault Community has no namespaces: every path starts with the tenant, and the
 policy is the only wall between tenants. Every policy passes the scope check
@@ -48,6 +50,8 @@ policy is the only wall between tenants. Every policy passes the scope check
 {{- $role := $f.role }}
 {{- $caps := $f.caps }}
 {{- $subscribeRaw := dig "metadata" "annotations" "vault.stakater.com/kv-subscribe-ns" "" $sa }}
+{{- $exposeRaw := dig "metadata" "annotations" "vault.stakater.com/kv-export-tenant" "" $sa }}
+{{- $importRaw := dig "metadata" "annotations" "vault.stakater.com/kv-import-tenant" "" $sa }}
 {{- if and $f.errors $saName $saNs }}
 {{- $m := index $idxErrs $saNs | default (dict) }}
 {{- $_ := set $m $saName (printf "error: Vault annotations rejected — see ConfigMap vault-config-%s.error in this namespace" $saName) }}
@@ -175,6 +179,31 @@ data:
   {{- if $subNs }}
   {{- $subKey := upper (replace "-" "_" $subNs) }}
   VAULT_FROM_{{ $subKey }}_PATH: {{ printf "%s/data/%s/_shared/from-%s/" $kv $env $subNs }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- /* Shares: the Enterprise keys. The namespace is empty, and a share login
+         uses VAULT_K8S_MOUNT: the share roles live on the tenant's own mount
+         (ADR-0007). */}}
+  {{- if $exposeRaw }}
+  {{- range $peer := splitList "," $exposeRaw }}
+  {{- $peer = trim $peer }}
+  {{- if include "vault.peerEmittable" (dict "peer" $peer "knownCsv" $.Values.knownTenants) }}
+  {{- $peerKey := upper (replace "-" "_" $peer) }}
+  VAULT_OUT_{{ $peerKey }}_NAMESPACE: ""
+  VAULT_OUT_{{ $peerKey }}_ROLE: {{ include "vault.shareOutName" (dict "tenant" $tenant "saNs" $saNs "saName" $saName "peer" $peer) }}
+  VAULT_OUT_{{ $peerKey }}_PATH: {{ printf "%s/kv/data/%s/from-%s/to-%s/" $.Values.sharedTenant.name $env $tenant $peer }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if $importRaw }}
+  {{- range $peer := splitList "," $importRaw }}
+  {{- $peer = trim $peer }}
+  {{- if include "vault.peerEmittable" (dict "peer" $peer "knownCsv" $.Values.knownTenants) }}
+  {{- $peerKey := upper (replace "-" "_" $peer) }}
+  VAULT_IN_{{ $peerKey }}_NAMESPACE: ""
+  VAULT_IN_{{ $peerKey }}_ROLE: {{ include "vault.shareInName" (dict "tenant" $tenant "saNs" $saNs "saName" $saName "peer" $peer) }}
+  VAULT_IN_{{ $peerKey }}_PATH: {{ printf "%s/kv/data/%s/from-%s/to-%s/" $.Values.sharedTenant.name $env $peer $tenant }}
   {{- end }}
   {{- end }}
   {{- end }}

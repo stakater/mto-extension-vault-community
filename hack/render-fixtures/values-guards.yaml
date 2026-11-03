@@ -42,6 +42,13 @@ serviceAccounts:
   - metadata: { name: g-app-only, namespace: team-a-dev, annotations: { vault.stakater.com/app: payments } }
   # subscribing to a namespace outside the tenant
   - metadata: { name: g-foreign-ns, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/kv-subscribe-ns: nowhere-ns } }
+  # share annotations on a ServiceAccount whose annotations are rejected: the
+  # share templates must not render for it (their `not $f.errors` gate)
+  - metadata: { name: g-share-err, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editorr, vault.stakater.com/kv-export-tenant: team-b, vault.stakater.com/kv-import-tenant: team-b } }
+  # a share annotation with kv off
+  - metadata: { name: g-orphan-share, namespace: team-a-dev, annotations: { vault.stakater.com/kv-export-tenant: team-b } }
+  # imports from a tenant that is not in the roster (a typo that never self-heals)
+  - metadata: { name: imp-bad, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/kv-import-tenant: "team-bb" } }
   # a subscription with kv off
   - metadata: { name: g-orphan-sub, namespace: team-a-dev, annotations: { vault.stakater.com/kv-subscribe-ns: team-a-prod } }
   # subscribes to a sibling namespace properly (positive control for the join check)
@@ -91,6 +98,12 @@ deployments:
     spec: { template: { spec: { serviceAccountName: good-sa } } }
   # reads a namespace outside the tenant
   - metadata: { name: d-sub-foreign, namespace: team-a-prod, annotations: { vault.stakater.com/kv-subscribe.w: "other-ns/leaf" } }
+    spec: { template: { spec: { serviceAccountName: good-sa } } }
+  # imports from an off-roster tenant -> reported, not silently dropped
+  - metadata: { name: d-imp-bad, namespace: team-a-prod, annotations: { vault.stakater.com/kv-import.p: "team-bb/leaf" } }
+    spec: { template: { spec: { serviceAccountName: imp-bad } } }
+  # imports from a tenant its ServiceAccount does not import from
+  - metadata: { name: d-imp-nogrant, namespace: team-a-prod, annotations: { vault.stakater.com/kv-import.q: "team-b/leaf" } }
     spec: { template: { spec: { serviceAccountName: good-sa } } }
   # unknown Deployment key
   - metadata: { name: d-unknown, namespace: team-a-prod, annotations: { vault.stakater.com/secret.db: postgres } }

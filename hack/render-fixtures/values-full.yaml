@@ -45,7 +45,7 @@ token:
   period: 1800
 
 serviceAccounts:
-  # Own-tenant grants with a named app, and a subscription.
+  # Kitchen-sink SA: own-tenant grants, a subscription, and both share directions.
   - metadata:
       name: app-a
       namespace: team-a-dev
@@ -54,6 +54,8 @@ serviceAccounts:
         vault.stakater.com/role: editor
         vault.stakater.com/app: payments
         vault.stakater.com/kv-subscribe-ns: team-a-tools
+        vault.stakater.com/kv-export-tenant: team-b
+        vault.stakater.com/kv-import-tenant: team-b
   # Second role + second namespace.
   - metadata:
       name: app-b
@@ -90,6 +92,7 @@ deployments:
         vault.stakater.com/kv-secret.web-db: "db-creds#password"
         vault.stakater.com/kv-secret.web-cfg: "app-config"
         vault.stakater.com/kv-subscribe.tools-shared: "team-a-tools/shared-item"
+        vault.stakater.com/kv-import.partner-data: "team-b/exported-item"
     spec:
       template:
         spec:

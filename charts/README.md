@@ -196,6 +196,8 @@ Access is opt-in per ServiceAccount, with annotations:
 | `vault.stakater.com/role` | `viewer` \| `editor` \| `admin` \| `audit-read` | Required with `kv`. How much access. |
 | `vault.stakater.com/app` | name | The app that owns the prefix. Default: the ServiceAccount name. |
 | `vault.stakater.com/kv-subscribe-ns` | CSV of namespaces | Read-only access to those sibling namespaces' `_shared/` prefix, in the same tenant. |
+| `vault.stakater.com/kv-export-tenant` | CSV of tenants | Write access to `shared/kv/…/from-<own>/to-<peer>/`. |
+| `vault.stakater.com/kv-import-tenant` | CSV of tenants | Read access to `shared/kv/…/from-<peer>/to-<own>/`. |
 
 The KV layout inside the tenant's `<tenant>/kv` mount:
 
@@ -209,6 +211,19 @@ A subscription is read-only on the producer's prefix, on the data path and on
 the metadata path: KV v2 metadata `update` sets `max_versions`, which destroys
 versions. A namespace outside the tenant can't be subscribed to.
 
+Shares between tenants live in the shared mount, in neither tenant's:
+
+```text
+shared/kv/data/<env>/from-<tenant>/to-<peer>/...   written by <tenant>'s exporting apps,
+                                                   read by <peer>'s importing apps
+```
+
+The share roles `share.<tenant>.<namespace>.<sa>.out.<peer>` and `….in.<peer>`
+live on the tenant's own auth mount, so a share login uses `VAULT_K8S_MOUNT`
+like any other (ADR-0007), and offboarding the tenant revokes its share tokens
+too. A share to a tenant that does not exist yet renders nothing, and appears
+when that tenant does.
+
 For each annotated ServiceAccount the chart renders a `Policy` and a
 `KubernetesAuthEngineRole` named `kv.<tenant>.<namespace>.<sa>`, on the
 tenant's mount `auth/<tenant>/kubernetes/workloads`, and a ConfigMap
@@ -218,7 +233,8 @@ tenant's mount `auth/<tenant>/kubernetes/workloads`, and a ConfigMap
 VAULT_ADDR, VAULT_CACERT (with vaultCABundle), VAULT_NAMESPACE="" (Community has none),
 VAULT_K8S_MOUNT=<tenant>/kubernetes/workloads, VAULT_K8S_ROLE,
 VAULT_KV_APP, VAULT_KV_APP_PATH=<tenant>/kv/data/<env>/<namespace>/<app>/, VAULT_KV_APP_META_PATH,
-VAULT_KV_SHARED_OUT_PATH, VAULT_FROM_<NS>_PATH (per subscription)
+VAULT_KV_SHARED_OUT_PATH, VAULT_FROM_<NS>_PATH (per subscription),
+VAULT_OUT_<PEER>_NAMESPACE="" / _ROLE / _PATH, VAULT_IN_<PEER>_NAMESPACE="" / _ROLE / _PATH
 ```
 
 The keys are the Enterprise extension's. `VAULT_NAMESPACE` is present and
@@ -247,6 +263,7 @@ and has no Vault namespace. Annotate the Deployment:
 |---|---|---|
 | `vault.stakater.com/kv-secret.<name>` | `<leaf>[#<key>]` | the app's own `<leaf>`; with `#<key>` only that key, else every key of the leaf |
 | `vault.stakater.com/kv-subscribe.<name>` | `<writer-ns>/<leaf>[#<key>]` | a `_shared/` leaf of the own namespace, or of a subscribed one |
+| `vault.stakater.com/kv-import.<name>` | `<peer>/<leaf>[#<key>]` | an imported share leaf, through SecretStore `<sa>.share-<peer>-vault` on `shared/kv` |
 
 Each renders ExternalSecret and Secret `<sa>-<name>`, where `<sa>` is the
 Deployment's `serviceAccountName`. It must be an annotated ServiceAccount that

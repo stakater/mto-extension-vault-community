@@ -19,7 +19,7 @@ import (
 
 // The fixture: three tenants in Vault's one namespace.
 //
-//	e2e-alpha  e2e-alpha-dev    SA web     kv editor
+//	e2e-alpha  e2e-alpha-dev    SA web     kv editor, exports to e2e-beta
 //	                            SA viewer  kv viewer
 //	                            SA admin   kv admin
 //	                            SA auditor kv audit-read
@@ -28,8 +28,8 @@ import (
 //	                            SA nosub   kv editor, no subscription
 //	           e2e-alpha-reuse  SA app     kv editor; the namespace is deleted and
 //	                                       created again under e2e-beta
-//	e2e-beta   e2e-beta-dev     SA reader  kv viewer
-//	e2e        e2e-core         SA core    kv admin; "e2e" is a prefix of
+//	e2e-beta   e2e-beta-dev     SA reader  kv viewer, imports from e2e-alpha
+//	e2e        e2e-core         SA core    kv admin, exports to e2e-beta; "e2e" is a prefix of
 //	                                       "e2e-alpha" and "e2e-beta" (AC-ISO-3)
 //
 // Names are short on purpose: the child TemplateInstance name is
@@ -162,7 +162,12 @@ func TestE2E(t *testing.T) {
 		createTenant(t, alpha, alphaNS, toolsNS, reuseNS)
 		createTenant(t, beta, betaNS)
 		createTenant(t, prefixT, coreNS)
-		for sa, role := range map[string]string{"web": "editor", "viewer": "viewer", "admin": "admin", "auditor": "audit-read"} {
+		createServiceAccount(t, alphaNS, "web", map[string]string{
+			annPrefix + "kv":               "true",
+			annPrefix + "role":             "editor",
+			annPrefix + "kv-export-tenant": beta,
+		})
+		for sa, role := range map[string]string{"viewer": "viewer", "admin": "admin", "auditor": "audit-read"} {
 			createServiceAccount(t, alphaNS, sa, map[string]string{annPrefix + "kv": "true", annPrefix + "role": role})
 		}
 		// Named like web, in another namespace, with no annotation: a role binds
@@ -178,8 +183,16 @@ func TestE2E(t *testing.T) {
 		})
 		createServiceAccount(t, toolsNS, "nosub", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
-		createServiceAccount(t, betaNS, "reader", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "viewer"})
-		createServiceAccount(t, coreNS, "core", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "admin"})
+		createServiceAccount(t, betaNS, "reader", map[string]string{
+			annPrefix + "kv":               "true",
+			annPrefix + "role":             "viewer",
+			annPrefix + "kv-import-tenant": alpha,
+		})
+		createServiceAccount(t, coreNS, "core", map[string]string{
+			annPrefix + "kv":               "true",
+			annPrefix + "role":             "admin",
+			annPrefix + "kv-export-tenant": beta,
+		})
 		copyOIDCClientSecret(t)
 		helmInstall(t)
 		waitTIReady(t, parentName)
@@ -477,12 +490,18 @@ func TestE2E(t *testing.T) {
 		role := roleName(alpha, alphaNS, "viewer")
 		p := appPath(alphaNS, "viewer", "cfg")
 		widened := policyRules(t, role) + "\npath \"" + kvMount(alpha) + "/data/" + env + "/" + alphaNS + "/viewer/*\" { capabilities = [\"create\", \"update\"] }\n"
-		vaultRoot(t, "write", "sys/policy/"+role, "policy="+widened)
 		viewerToken, _ := vaultLogin(t, alpha, role, saToken(t, alphaNS, "viewer"))
-		// The change took effect: without it, the revert below would prove nothing.
-		if err := kvPut(t, viewerToken, alpha, p, "mode=tampered"); err != nil {
-			t.Fatalf("the widened policy did not take effect: %v", err)
-		}
+		// The change took effect: without it, the revert below would prove
+		// nothing. VCO's drift reconcile can revert the widening between the
+		// write and the check (every sync period), so the widening is applied
+		// again until one write lands.
+		waitFor(t, "the widened policy takes effect", func() string {
+			vaultRoot(t, "write", "sys/policy/"+role, "policy="+widened)
+			if err := kvPut(t, viewerToken, alpha, p, "mode=tampered"); err != nil {
+				return err.Error()
+			}
+			return ""
+		})
 		// VCO's drift detection rewrites the policy from its CR within a sync period.
 		waitFor(t, "VCO reverts the widened policy", func() string {
 			err := kvPut(t, viewerToken, alpha, p, "mode=still-writable")
@@ -969,6 +988,89 @@ spec:
 				return err.Error()
 			} else if v != "https://db.internal" {
 				return "DB_URL=" + v
+			}
+			return ""
+		})
+	})
+
+	step("share: e2e-alpha exports, e2e-beta imports through ESO", func(t *testing.T) {
+		// AC-SHR-3. The share lives in shared/kv, in neither tenant's mount; each
+		// share role lives on its OWN tenant's auth mount (ADR-0007), so a share
+		// login uses the VAULT_K8S_MOUNT the app already has.
+		outRole := "share." + alpha + "." + alphaNS + ".web.out." + beta
+		inRole := "share." + beta + "." + betaNS + ".reader.in." + alpha
+		sharePath := env + "/from-" + alpha + "/to-" + beta + "/handoff"
+		waitVCO(t, "kubernetesauthengineroles", outRole)
+		waitVCO(t, "kubernetesauthengineroles", inRole)
+
+		cm := configMapData(t, alphaNS, "vault-config-web")
+		peer := strings.ToUpper(strings.ReplaceAll(beta, "-", "_"))
+		if cm["VAULT_OUT_"+peer+"_ROLE"] != outRole || cm["VAULT_OUT_"+peer+"_NAMESPACE"] != "" ||
+			cm["VAULT_OUT_"+peer+"_PATH"] != kvMount(sharedName)+"/data/"+env+"/from-"+alpha+"/to-"+beta+"/" {
+			t.Fatalf("web's ConfigMap does not describe its share: %v", cm)
+		}
+		// Logged in exactly as the ConfigMap says: VAULT_K8S_MOUNT, the share role.
+		outToken, _, err := vaultTryLoginAt(t, cm["VAULT_K8S_MOUNT"], cm["VAULT_OUT_"+peer+"_ROLE"], saToken(t, alphaNS, "web"))
+		if err != nil {
+			t.Fatalf("web could not log in with its share role at VAULT_K8S_MOUNT: %v", err)
+		}
+		if err := kvPut(t, outToken, sharedName, sharePath, "token=t1"); err != nil {
+			t.Fatalf("exporter could not write the share: %v", err)
+		}
+		inToken, _ := vaultLogin(t, beta, inRole, saToken(t, betaNS, "reader"))
+		if got, err := kvGet(t, inToken, sharedName, sharePath, "token"); err != nil || got != "t1" {
+			t.Fatalf("importer read the share: got %q, err %v", got, err)
+		}
+		if err := kvPut(t, inToken, sharedName, sharePath, "token=tampered"); !refused(err) {
+			t.Errorf("importer wrote to a share it may only read; err: %v", err)
+		}
+		// A share role binds one tenant's ServiceAccount: the other tenant's
+		// ServiceAccount is refused by it, in both directions.
+		if _, _, err := vaultTryLogin(t, alpha, outRole, saToken(t, betaNS, "reader")); !refused(err) {
+			t.Errorf("e2e-beta's ServiceAccount was not refused by e2e-alpha's share-out role; err: %v", err)
+		}
+		if _, _, err := vaultTryLogin(t, beta, inRole, saToken(t, alphaNS, "web")); !refused(err) {
+			t.Errorf("e2e-alpha's ServiceAccount was not refused by e2e-beta's share-in role; err: %v", err)
+		}
+		// One binding changed at a time, as for the own-tenant role: the same
+		// tenant's other ServiceAccount (no export annotation), and a
+		// ServiceAccount named web in another namespace.
+		if _, _, err := vaultTryLogin(t, alpha, outRole, saToken(t, alphaNS, "viewer")); !refused(err) {
+			t.Errorf("a ServiceAccount without kv-export-tenant was not refused by web's share-out role; err: %v", err)
+		}
+		if _, _, err := vaultTryLogin(t, alpha, outRole, saToken(t, toolsNS, "web")); !refused(err) {
+			t.Errorf("a ServiceAccount named web in another namespace was not refused by web's share-out role; err: %v", err)
+		}
+		// The reverse direction was never granted. Seeded as root, so the
+		// refusal is about the caller, not a path with nothing at it.
+		reversePath := env + "/from-" + beta + "/to-" + alpha + "/x"
+		vaultRoot(t, "kv", "put", "-mount="+kvMount(sharedName), reversePath, "token=r1")
+		if _, err := kvGet(t, outToken, sharedName, reversePath, "token"); !refused(err) {
+			t.Errorf("exporter read the reverse share path; err: %v", err)
+		}
+		// The prefix tenant e2e exports to e2e-beta too: its folder is
+		// from-e2e/, never from-e2e-alpha/, which web wrote above.
+		coreOut := "share." + prefixT + "." + coreNS + ".core.out." + beta
+		waitVCO(t, "kubernetesauthengineroles", coreOut)
+		coreToken, _ := vaultLogin(t, prefixT, coreOut, saToken(t, coreNS, "core"))
+		if err := kvPut(t, coreToken, sharedName, env+"/from-"+prefixT+"/to-"+beta+"/x", "token=c1"); err != nil {
+			t.Fatalf("the prefix tenant could not write its own share: %v", err)
+		}
+		if err := kvPut(t, coreToken, sharedName, sharePath, "token=forged"); !refused(err) {
+			t.Errorf("the prefix tenant e2e wrote e2e-alpha's share; err: %v", err)
+		}
+
+		createDeployment(t, betaNS, "reader", "reader", map[string]string{
+			annPrefix + "kv-import.handoff": alpha + "/handoff#token",
+		}, []corev1.EnvVar{secretEnv("HANDOFF", "reader-handoff", "token")})
+		waitFor(t, "ExternalSecret reader-handoff synced", func() string {
+			if v := secretValue(t, betaNS, "reader-handoff", "token"); v != "t1" {
+				o := get(t, gvrExternalSecret, betaNS, "reader-handoff")
+				if o == nil {
+					return "ExternalSecret absent"
+				}
+				s, msg := condition(o, "Ready")
+				return fmt.Sprintf("Secret token=%q; ExternalSecret Ready=%q %s", v, s, msg)
 			}
 			return ""
 		})
