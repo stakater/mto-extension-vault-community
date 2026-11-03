@@ -1,6 +1,6 @@
 # ADR-0002: A tenant is a mount prefix, not a namespace
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0007
 - **Date:** 2026-10-03; revised 2026-11-02 after story C.0; accepted 2026-11-03
 
 ## Context

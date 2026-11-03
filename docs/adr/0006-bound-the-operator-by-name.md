@@ -1,6 +1,6 @@
 # ADR-0006: Bound the operator by name and type, and what it is asked at admission
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0008
 - **Date:** 2026-10-03; revised 2026-11-02 after story C.0; accepted 2026-11-03
 
 ## Context

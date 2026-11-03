@@ -157,3 +157,302 @@ yq: ## Ensure a yq binary of at least $(YQ_MIN) is available.
 	if [ "$$(printf '%s\n%s\n' "$(YQ_MIN)" "$$have" | sort -V | head -1)" != "$(YQ_MIN)" ]; then \
 		echo "yq $$have is older than the required $(YQ_MIN) ($(YQ_BIN))"; exit 1; \
 	fi
+
+# ─── Lab ─────────────────────────────────────────────────────────────
+#
+# One kind cluster with everything the extension needs:
+#   cert-manager                 t-op-v2's and VCO's webhook certificates
+#   MTO Tenant CRD               the parent Template's input (MTO itself is not installed)
+#   template-operator-v2         the renderer
+#   External Secrets, Reloader   delivery and rotation
+#   Vault Community (dev mode)   the only edition this extension supports
+#   vault-config-operator (VCO)  the VCO_VERSION release chart
+#
+# `make lab-up` builds all of it; every target is idempotent, so a re-run after
+# a failure reuses what is already up.
+
+CLUSTER_NAME ?= vault-ce-lab
+KIND_CONFIG  ?= hack/lab/kind-config.yaml
+# Every target names its context: never the ambient current-context.
+CONTEXT ?= kind-$(CLUSTER_NAME)
+KUBECTL ?= kubectl
+KIND    ?= kind
+CONTAINER_TOOL ?= docker
+KC = $(KUBECTL) --context $(CONTEXT)
+
+CERT_MANAGER_VERSION ?= v1.20.0
+CERT_MANAGER_URL     ?= https://github.com/cert-manager/cert-manager/releases/download/$(CERT_MANAGER_VERSION)/cert-manager.yaml
+
+# template-operator-v2: built from a local checkout's TOV2_REF (TOV2_FROM=src,
+# the default when TOV2_SRC exists), or the public chart (TOV2_FROM=chart, the
+# default in CI). The source build never switches the checkout's branch: it
+# archives TOV2_REF into a scratch directory.
+TOV2_SRC  ?= ../template-operator-v2
+TOV2_REF  ?= origin/main
+TOV2_FROM ?= $(if $(wildcard $(TOV2_SRC)/go.mod),src,chart)
+TOV2_IMG  ?= template-operator-v2:lab
+# The chart's release name MUST be template-operator-v2: its Certificate
+# hardcodes issuerRef.name=template-operator-v2-selfsigned-issuer.
+TOV2_RELEASE       := template-operator-v2
+TOV2_CHART         ?= oci://ghcr.io/stakater/public/charts/template-operator-v2
+TOV2_CHART_VERSION ?= 0.0.7
+TOV2_DEPLOYMENT    ?= template-operator-v2-controller-manager
+ifeq ($(TOV2_FROM),src)
+TOV2_NS ?= template-operator-v2-system
+TOV2_SA ?= template-operator-v2-controller-manager
+else
+TOV2_NS ?= stakater-template-operator
+TOV2_SA ?= $(TOV2_RELEASE)
+endif
+
+ESO_CHART_VERSION      ?= 2.11.0
+RELOADER_CHART_VERSION ?= 2.2.17
+
+VAULT_NS            := vault
+VAULT_CHART_VERSION ?= 0.34.1
+VAULT_VERSION       ?= 2.1.1
+
+VCO_NS        ?= vault-config-operator
+VCO_RELEASE   ?= vault-config-operator
+# Drift detection is off by default in VCO. The lab turns it on with a short
+# period, so out-of-band edits are reverted quickly — and so the e2e suite can
+# watch objects across several drift reconciles in well under a minute.
+VCO_SYNC_PERIOD_SECONDS ?= 30
+
+# The Kubernetes namespace that holds every VCO CR, and the ServiceAccount the
+# CRs log in to Vault with (spec.authentication.serviceAccount).
+CONFIG_NS ?= vault-config
+CONFIG_SA ?= vco-admin
+VERIFY_LOGIN ?= 1
+CHART_REPO_URL ?= http://chart-repo.chart-repo.svc.cluster.local
+
+LAB_VCO_KINDS := secretenginemounts.redhatcop.redhat.io,authenginemounts.redhatcop.redhat.io,kubernetesauthengineconfigs.redhatcop.redhat.io,kubernetesauthengineroles.redhatcop.redhat.io,policies.redhatcop.redhat.io,jwtoidcauthengineconfigs.redhatcop.redhat.io,jwtoidcauthengineroles.redhatcop.redhat.io
+
+define wait-crd
+	@ok=""; for i in 1 2 3; do \
+		$(KC) wait crd $(1) --for=condition=Established --timeout=60s && { ok=1; break; }; \
+		echo "  CRDs not established yet, retrying ($$i/3)"; sleep 5; \
+	done; \
+	if [ -z "$$ok" ]; then echo "error: CRDs $(1) never became Established" >&2; exit 1; fi
+endef
+
+.PHONY: lab-up
+lab-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-vco lab-chart-repo lab-bootstrap lab-vault-bootstrap ## Build the whole lab.
+
+.PHONY: lab-down
+lab-down: ## Delete the lab cluster.
+	$(KIND) delete cluster --name $(CLUSTER_NAME)
+
+.PHONY: lab-cluster
+lab-cluster: ## Create the kind cluster (idempotent).
+	@# Listed on its own line: piped into grep -q, a failed `kind get` read as
+	@# "no cluster", and under pipefail grep's early exit could fail kind.
+	@clusters=$$($(KIND) get clusters) || exit $$?; \
+	if grep -qx '$(CLUSTER_NAME)' <<<"$$clusters"; then \
+		echo "kind cluster $(CLUSTER_NAME) already exists"; \
+	else \
+		$(KIND) create cluster --name $(CLUSTER_NAME) --config $(KIND_CONFIG); \
+	fi
+
+.PHONY: lab-cert-manager
+lab-cert-manager: ## Install cert-manager and wait until its webhook answers.
+	$(KC) apply -f $(CERT_MANAGER_URL)
+	$(KC) wait deployment.apps/cert-manager-webhook --for=condition=Available -n cert-manager --timeout=300s
+	$(call wait-crd,certificates.cert-manager.io issuers.cert-manager.io)
+	@# Available=True does not mean the webhook answers. Issuing a throwaway
+	@# Issuer is the check; on exhaustion the target fails with the last error.
+	@probe='{"apiVersion":"cert-manager.io/v1","kind":"Issuer","metadata":{"name":"cm-readiness-probe","namespace":"cert-manager"},"spec":{"selfSigned":{}}}'; \
+	ok=""; for i in $$(seq 1 30); do \
+		echo "$$probe" | $(KC) apply -f - >/dev/null 2>&1 && \
+		$(KC) delete issuer cm-readiness-probe -n cert-manager >/dev/null 2>&1 && { ok=1; break; }; \
+		echo "  cert-manager webhook not ready yet ($$i/30)"; sleep 4; \
+	done; \
+	if [ -z "$$ok" ]; then \
+		echo "error: cert-manager webhook never became ready; the last attempt said:" >&2; \
+		echo "$$probe" | $(KC) apply -f - 1>&2 || true; \
+		exit 1; \
+	fi
+
+.PHONY: lab-tenant-crd
+lab-tenant-crd: ## Install MTO's Tenant CRD (only the CRD, not MTO).
+	$(KC) apply -f hack/lab/crds/tenantoperator.stakater.com_tenants.yaml
+	$(call wait-crd,tenants.tenantoperator.stakater.com)
+
+.PHONY: lab-tov2
+lab-tov2: helm ## Install template-operator-v2: TOV2_FROM=src builds TOV2_REF of TOV2_SRC, TOV2_FROM=chart the public chart.
+ifeq ($(TOV2_FROM),src)
+	@test -f $(TOV2_SRC)/go.mod || { echo "error: TOV2_SRC=$(TOV2_SRC) is not a template-operator-v2 checkout" >&2; exit 1; }
+	git -C $(TOV2_SRC) fetch -q origin
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT \
+		&& git -C $(TOV2_SRC) archive $(TOV2_REF) | tar -x -C "$$tmp" \
+		&& echo "building template-operator-v2 $$(git -C $(TOV2_SRC) rev-parse --short $(TOV2_REF)) as $(TOV2_IMG)" \
+		&& $(CONTAINER_TOOL) build -q -t $(TOV2_IMG) "$$tmp" >/dev/null \
+		&& $(CONTAINER_TOOL) save $(TOV2_IMG) | $(CONTAINER_TOOL) exec -i $(CLUSTER_NAME)-control-plane ctr --namespace=k8s.io images import --all-platforms - >/dev/null \
+		&& (cd "$$tmp/config/manager" && kustomize edit set image controller=$(TOV2_IMG)) \
+		&& kustomize build "$$tmp/config/default" | $(KC) apply --server-side --force-conflicts -f - >/dev/null
+	@# Same tag, new image: restart so the pod picks up the build just loaded.
+	$(KC) -n $(TOV2_NS) rollout restart deploy/$(TOV2_DEPLOYMENT)
+else
+	$(KC) create namespace $(TOV2_NS) --dry-run=client -o yaml | $(KC) apply -f -
+	$(HELM) upgrade --install $(TOV2_RELEASE) $(TOV2_CHART) --version $(TOV2_CHART_VERSION) \
+		--kube-context $(CONTEXT) -n $(TOV2_NS) --reset-values
+endif
+	@# Before the rollout wait: an unscoped sync-enforcement webhook deadlocks
+	@# the cluster. The script explains why; on a scoped install it only
+	@# confirms the scoping.
+	KUBECTL=$(KUBECTL) E2E_CONTEXT=$(CONTEXT) \
+		WEBHOOK_NAME=$(TOV2_RELEASE)-template-operator-v2-sync-enforcement \
+		./hack/lab/scope-tov2-webhook.sh
+	$(KC) -n $(TOV2_NS) rollout status deploy/$(TOV2_DEPLOYMENT) --timeout=300s
+
+.PHONY: lab-eso
+lab-eso: helm ## Install External Secrets Operator (the .eso slice's SecretStore/ExternalSecret).
+	$(HELM) repo add external-secrets https://charts.external-secrets.io --force-update >/dev/null
+	$(HELM) upgrade --install external-secrets external-secrets/external-secrets \
+		--version $(ESO_CHART_VERSION) \
+		--kube-context $(CONTEXT) -n external-secrets --create-namespace --reset-values \
+		--wait --timeout 5m
+	$(call wait-crd,secretstores.external-secrets.io externalsecrets.external-secrets.io)
+
+.PHONY: lab-reloader
+lab-reloader: helm ## Install Stakater Reloader: restarts a Deployment when a Secret or ConfigMap it uses changes.
+	$(HELM) repo add stakater https://stakater.github.io/stakater-charts --force-update >/dev/null
+	$(HELM) upgrade --install reloader stakater/reloader \
+		--version $(RELOADER_CHART_VERSION) \
+		--kube-context $(CONTEXT) -n reloader --create-namespace --reset-values \
+		--wait --timeout 5m
+
+.PHONY: lab-vault
+lab-vault: helm ## Install Vault Community Edition $(VAULT_VERSION) in dev mode.
+	$(KC) create namespace $(VAULT_NS) --dry-run=client -o yaml | $(KC) apply -f -
+	$(HELM) repo add hashicorp https://helm.releases.hashicorp.com --force-update >/dev/null
+	$(HELM) upgrade --install vault hashicorp/vault --version $(VAULT_CHART_VERSION) \
+		--kube-context $(CONTEXT) -n $(VAULT_NS) -f hack/lab/vault-values.yaml \
+		--set server.image.repository=hashicorp/vault \
+		--set server.image.tag=$(VAULT_VERSION)
+	@# The chart's StatefulSet uses OnDelete, so an upgrade only reaches the pod
+	@# when the pod is deleted. Dev mode is in-memory anyway.
+	$(KC) -n $(VAULT_NS) delete pod vault-0 --ignore-not-found --wait=true
+	@# kubectl wait fails at once on a pod that does not exist yet, and the
+	@# StatefulSet takes a moment to create it (on a first install, too).
+	@for i in $$(seq 1 60); do $(KC) -n $(VAULT_NS) get pod vault-0 >/dev/null 2>&1 && break; sleep 2; done
+	$(KC) -n $(VAULT_NS) wait --for=condition=Ready pod/vault-0 --timeout=300s
+
+.PHONY: lab-vault-bootstrap
+lab-vault-bootstrap: ## Give VCO a kubernetes-auth login in Vault (the lab policy), and prove it.
+	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) VAULT_NS=$(VAULT_NS) \
+		CONFIG_NS=$(CONFIG_NS) SA=$(CONFIG_SA) ROLE=$(CONFIG_SA) VERIFY_LOGIN=$(VERIFY_LOGIN) \
+		./hack/lab/vault-bootstrap.sh
+
+# The VCO settings the lab uses.
+#   enableMonitoring=false: the chart otherwise renders a ServiceMonitor, and
+#   kind has no Prometheus CRDs (upstream issue #221).
+#   CACHE_VAULT_TOKEN=true: VCO reuses and renews one Vault token. Without it
+#   VCO logs in again on every reconcile, and with drift detection every
+#   SYNC_PERIOD_SECONDS that piles up thousands of live tokens in Vault.
+VCO_HELM_SETTINGS = --kube-context $(CONTEXT) -n $(VCO_NS) --create-namespace --skip-crds \
+	--set enableCertManager=true \
+	--set enableMonitoring=false \
+	--set 'env[0].name=VAULT_ADDR' --set 'env[0].value=http://vault.$(VAULT_NS).svc:8200' \
+	--set 'env[1].name=ENABLE_DRIFT_DETECTION' --set-string 'env[1].value=true' \
+	--set 'env[2].name=SYNC_PERIOD_SECONDS' --set-string 'env[2].value=$(VCO_SYNC_PERIOD_SECONDS)' \
+	--set 'env[3].name=CACHE_VAULT_TOKEN' --set-string 'env[3].value=true'
+
+.PHONY: lab-vco
+lab-vco: helm ## Install VCO $(VCO_VERSION) from its release chart, pointed at the lab Vault.
+	$(HELM) repo add vault-config-operator $(VCO_HELM_REPO) --force-update >/dev/null
+	@# helm installs crds/ only on the first install and never upgrades them, so
+	@# the release's CRDs are applied explicitly.
+	@tmp=$$(mktemp -d) && trap 'rm -rf "$$tmp"' EXIT \
+		&& $(HELM) pull vault-config-operator/vault-config-operator --version $(VCO_VERSION) --untar -d "$$tmp" \
+		&& $(KC) apply --server-side --force-conflicts -f "$$tmp/vault-config-operator/crds/" >/dev/null \
+		&& echo "applied the CRDs of vault-config-operator $(VCO_VERSION)"
+	$(HELM) upgrade --install $(VCO_RELEASE) vault-config-operator/vault-config-operator --version $(VCO_VERSION) \
+		$(VCO_HELM_SETTINGS)
+	$(KC) -n $(VCO_NS) rollout status deploy/$(VCO_RELEASE) --timeout=300s
+
+.PHONY: lab-chart-repo
+lab-chart-repo: helm ## Serve THIS checkout's tenant chart from an in-cluster HTTP repo for t-op-v2 to pull.
+	$(KC) apply -f hack/lab/chart-repo.yaml
+	KUBECTL=$(KUBECTL) HELM=$(HELM) E2E_CONTEXT=$(CONTEXT) CHART_DIR=$(TENANT_CHART_DIR) \
+		./hack/lab/chart-repo-publish.sh
+
+.PHONY: lab-bootstrap
+lab-bootstrap: helm ## Install the bootstrap chart from this checkout, pulling the tenant chart from the lab repo.
+	$(HELM) upgrade --install mto-extension-vault-community-bootstrap $(BOOTSTRAP_CHART_DIR) \
+		--kube-context $(CONTEXT) -n $(CONFIG_NS) --create-namespace \
+		--set configNamespace=$(CONFIG_NS) \
+		--set vco.serviceAccount=$(CONFIG_SA) --set vco.role=$(CONFIG_SA) \
+		--set templateOperator.serviceAccountName=$(TOV2_SA) \
+		--set templateOperator.namespace=$(TOV2_NS) \
+		--set tenantChart.registry=$(CHART_REPO_URL) \
+		--set parent.vaultServer=http://vault.$(VAULT_NS).svc:8200 \
+		--set parent.eso=enabled
+
+.PHONY: lab-uninstall
+lab-uninstall: helm ## Uninstall the bootstrap chart in the documented order (charts/README.md → Uninstall).
+	@# The full name: on OpenShift the short name is OpenShift's own kind, and
+	@# --ignore-not-found would then hide that nothing was deleted.
+	$(KC) -n $(CONFIG_NS) delete templateinstances.templates.v2.stakater.com mto-extension-vault-community-parent --ignore-not-found --wait --timeout=5m
+	@# The RBAC and the VCO login ServiceAccount must outlive every CR they
+	@# tear down, so the release goes only once no VCO CR is left.
+	@left=""; for i in $$(seq 1 60); do \
+		if ! out=$$($(KC) -n $(CONFIG_NS) get $(LAB_VCO_KINDS) -o name 2>/tmp/lab-uninstall.err); then \
+			echo "error: cannot list VCO CRs — not uninstalling the release:" >&2; cat /tmp/lab-uninstall.err >&2; exit 1; \
+		fi; \
+		left=$$(printf '%s' "$$out" | grep -c . || true); \
+		[ "$$left" = 0 ] && break; sleep 5; \
+	done; \
+	if [ "$$left" != 0 ]; then echo "error: $$left VCO CRs still in $(CONFIG_NS) after 5m — not uninstalling the release:" >&2; \
+		$(KC) -n $(CONFIG_NS) get $(LAB_VCO_KINDS) >&2; exit 1; fi
+	$(HELM) uninstall mto-extension-vault-community-bootstrap --kube-context $(CONTEXT) -n $(CONFIG_NS) --wait
+
+.PHONY: lab-render
+lab-render: ## Apply the sample Tenants, their labelled namespaces and annotated ServiceAccounts.
+	$(KC) apply -f hack/lab/sample-tenants.yaml
+
+# ─── E2E ─────────────────────────────────────────────────────────────
+
+# The suite (tests/e2e) installs and uninstalls the bootstrap chart itself, and
+# brings its own tenants, so it runs against the plain lab. It needs Vault
+# COMMUNITY Edition — it refuses Enterprise, where a tenant is a namespace.
+E2E_WAIT_TIMEOUT ?= 4m
+# Set by e2e-kind: a failed run keeps its state for e2e-diagnostics.
+E2E_KEEP_ON_FAILURE ?=
+# go test's own limit. Keep it below the CI job's timeout-minutes (e2e.yaml)
+# minus the lab build: a job killed by CI runs no diagnostics.
+E2E_GO_TIMEOUT ?= 45m
+
+.PHONY: e2e-up
+e2e-up: lab-cluster lab-cert-manager lab-tenant-crd lab-tov2 lab-eso lab-reloader lab-vault lab-vco lab-chart-repo ## The lab without the bootstrap chart: what the e2e suite starts from.
+	$(MAKE) lab-vault-bootstrap VERIFY_LOGIN=0
+
+.PHONY: e2e-test
+e2e-test: helm ## Run tests/e2e against the lab. E2E_KEEP=1 leaves the install in place.
+	E2E=1 KUBE_CONTEXT=$(CONTEXT) HELM=$(HELM) KUBECTL=$(KUBECTL) \
+		E2E_CHART_REPO_URL=$(CHART_REPO_URL) \
+		E2E_TOV2_SA=system:serviceaccount:$(TOV2_NS):$(TOV2_SA) \
+		E2E_CONFIG_NAMESPACE=$(CONFIG_NS) E2E_VAULT_NAMESPACE=$(VAULT_NS) \
+		E2E_VAULT_SERVER=http://vault.$(VAULT_NS).svc:8200 \
+		E2E_WAIT_TIMEOUT=$(E2E_WAIT_TIMEOUT) E2E_VCO_SYNC_PERIOD=$(VCO_SYNC_PERIOD_SECONDS)s \
+		E2E_KEEP_ON_FAILURE=$(E2E_KEEP_ON_FAILURE) \
+		E2E_VCO_NAMESPACE=$(VCO_NS) E2E_VCO_DEPLOYMENT=$(VCO_RELEASE) \
+		go test ./tests/e2e/ -count=1 -v -timeout $(E2E_GO_TIMEOUT)
+
+.PHONY: e2e-kind
+e2e-kind: ## Build the lab and run the suite. Dumps ./e2e-logs on failure.
+	$(MAKE) e2e-up && $(MAKE) e2e-test E2E_KEEP_ON_FAILURE=1 || { $(MAKE) e2e-diagnostics; exit 1; }
+
+.PHONY: e2e-diagnostics
+e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
+	@mkdir -p e2e-logs
+	-$(KC) get templateinstances.templates.v2.stakater.com,templates.templates.v2.stakater.com -A -o wide > e2e-logs/templates.txt 2>&1
+	-$(KC) -n $(CONFIG_NS) get $(LAB_VCO_KINDS) -o yaml > e2e-logs/vco-crs.yaml 2>&1
+	-$(KC) get externalsecrets,secretstores -A -o yaml > e2e-logs/eso.yaml 2>&1
+	-$(KC) get pods -A -o wide > e2e-logs/pods.txt 2>&1
+	-$(KC) -n $(TOV2_NS) logs deploy/$(TOV2_DEPLOYMENT) --tail=5000 > e2e-logs/tov2.log 2>&1
+	-$(KC) -n $(VCO_NS) logs deploy/$(VCO_RELEASE) --tail=5000 > e2e-logs/vco.log 2>&1
+	-$(KC) -n external-secrets logs deploy/external-secrets --tail=2000 > e2e-logs/eso.log 2>&1
+	-$(KC) -n reloader logs deploy/reloader-reloader --tail=2000 > e2e-logs/reloader.log 2>&1
+	-$(KC) -n $(VAULT_NS) logs vault-0 --tail=2000 > e2e-logs/vault.log 2>&1
+	@echo "diagnostics in ./e2e-logs"

@@ -49,9 +49,8 @@ flowchart LR
     KVA[(team-a/kv)]
     KVB[(team-b/kv)]
     KVS[(shared/kv)]
-    K8S[auth/team-a/kubernetes/workloads<br/>roles kv.team-a.ns.sa]
+    K8S[auth/team-a/kubernetes/workloads<br/>roles kv.team-a.ns.sa and share.team-a.*]
     OIDC[auth/team-a/oidc/sso<br/>roles sso.team-a.role]
-    K8SS[auth/shared/kubernetes/workloads<br/>roles share.tenant.ns.sa.dir.peer]
     POL[policies kv.* share.* sso.*]
   end
   IDP[Identity provider]
@@ -63,7 +62,7 @@ flowchart LR
   CTI -->|ConfigMaps, ESO objects| NS
   BOOT --> VAP
   VAP -.->|checks every VCO CR| VCO
-  VCO --> KVA & KVB & KVS & K8S & K8SS & OIDC & POL
+  VCO --> KVA & KVB & KVS & K8S & OIDC & POL
   ESO -->|login as workload| K8S
   ESO -->|read| KVA
   ESO --> NS
@@ -80,7 +79,7 @@ flowchart TB
     SCOPE[_helpers.tpl<br/>scope check: every path inside tenant/kv<br/>or its named shares; role bindings; name families]
     AUTH[01-tenant-scaffolding<br/>auth mount tenant/kubernetes/workloads + config]
     SA[04-sa-own-tenant<br/>Policy + KubernetesAuthEngineRole per SA,<br/>bound by namespace name and tenant label]
-    SH[04-sa-share-in / -out<br/>share policies on shared/kv,<br/>roles on shared/kubernetes/workloads]
+    SH[04-sa-share-in / -out<br/>share policies on shared/kv,<br/>roles on the tenant's own mount]
     SSO[06-oidc / 07-sso-policies<br/>mount tenant/oidc/sso, roles and policies per role]
     CM[vault-config-sa, vault-apps<br/>VAULT_NAMESPACE empty]
     ES[05-externalsecrets<br/>slice eso]

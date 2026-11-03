@@ -39,13 +39,12 @@ validate() { # validate <label> <manifest> <expected-count>
 expected() { # expected <fixture> <component> -> VCO CR count that render emits
   [ "$2" = eso ] && { echo 0; return; }
   case "$1" in
+    full) echo 10 ;; guards) echo 6 ;; no-optins) echo 2 ;; no-workloads) echo 2 ;;
     *) echo "no expected count for fixture $1" >&2; exit 1 ;;
   esac
 }
 
-# The tenant chart's fixtures. Empty until the tenant chart renders objects.
-TENANT_FIXTURES=""
-for fx in $TENANT_FIXTURES; do
+for fx in full guards no-optins no-workloads; do
   for c in all core eso; do
     # Render on its own line: a failed render must not become an empty input.
     if ! "$HELM" template mto-extension-vault-community "$CHART" -n vault-config \
@@ -68,13 +67,12 @@ printf '{{ tpl ($.Files.Get "files/parent-gotemplate.tpl") (dict "parameters" .V
          | {"parameters": (.spec.parameters | map(select(has("value"))) | map({"key": .name, "value": .value}) | from_entries)}' \
   "$WORK/boot.yaml" > "$WORK/shim/values.yaml"
 "$YQ" e -i '.parameters.tenants = [{"metadata": {"name": "team-a"}}] | .parameters.tenantNamespaces = [{"metadata": {"name": "team-a-dev", "labels": {"stakater.com/tenant": "team-a"}}}]' "$WORK/shim/values.yaml"
-# shared-kv, shared-kubernetes, shared-kubernetes-config, team-a-kv
-for tr in "" vault-token-reviewer; do
-  if ! "$HELM" template shim "$WORK/shim" --set-string "parameters.tokenReviewerServiceAccount=$tr" > "$WORK/parent.yaml" 2>"$WORK/p.err"; then
-    echo "FAIL parent: render failed: $(head -1 "$WORK/p.err" | cut -c1-200)"; fail=1; continue
-  fi
-  validate "parent${tr:+ (reviewer)}" "$WORK/parent.yaml" 4
-done
+# shared-kv and team-a-kv
+if "$HELM" template shim "$WORK/shim" > "$WORK/parent.yaml" 2>"$WORK/p.err"; then
+  validate "parent" "$WORK/parent.yaml" 2
+else
+  echo "FAIL parent: render failed: $(head -1 "$WORK/p.err" | cut -c1-200)"; fail=1
+fi
 
 # Self-test: a misspelt metadata key, which pruning cannot see, is refused. The
 # same mount without the typo must validate, so the refusal is about the typo.

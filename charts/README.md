@@ -9,7 +9,7 @@ object names and ConfigMap keys.
 
 | Chart | Installed | Role |
 |---|---|---|
-| [mto-extension-vault-community-bootstrap](mto-extension-vault-community-bootstrap/) | once per cluster, by hand | Watches `Tenant` CRs and fans out one render per tenant. Renders every tenant's KV mount and the shared mounts. Creates the ServiceAccount VCO logs in with. |
+| [mto-extension-vault-community-bootstrap](mto-extension-vault-community-bootstrap/) | once per cluster, by hand | Watches `Tenant` CRs and fans out one render per tenant. Renders every tenant's KV mount and the shared mount. Creates the ServiceAccount VCO logs in with. |
 | [mto-extension-vault-community](mto-extension-vault-community/) | never by hand | Per-tenant template. template-operator-v2 (t-op-v2) pulls it and renders it once per `Tenant`. |
 
 The charts only *describe* configuration: they emit VCO CRs, and VCO writes them
@@ -26,7 +26,7 @@ paths with its name in front, in Vault's one namespace:
 | `auth/kubernetes/workloads/` | `auth/<tenant>/kubernetes/workloads/` |
 | `auth/oidc/sso/` | `auth/<tenant>/oidc/sso/` |
 | shared namespace `kv/` | `shared/kv/` |
-| shared namespace `auth/kubernetes/workloads/` | `auth/shared/kubernetes/workloads/` |
+| shared namespace `auth/kubernetes/workloads/` | none: share roles live on `auth/<tenant>/kubernetes/workloads/` |
 
 The policy is the only wall between tenants. Every policy and role the charts
 render passes a scope check (`docs/design.md` §4), and the bootstrap chart's
@@ -50,7 +50,6 @@ admission policies apply the same check to every VCO CR, whoever writes it.
 ```text
 Tenant CRs ──► parent TemplateInstance (mto-extension-vault-community-parent)
                  once per cluster     SecretEngineMount shared-kv          → shared/kv
-                                      AuthEngineMount shared-kubernetes    → auth/shared/kubernetes/workloads
                  per Tenant           SecretEngineMount <tenant>-kv        → <tenant>/kv
                  per Tenant with a    TemplateInstance mto-extension-vault-community-<tenant>      → core slice
                  labelled namespace   TemplateInstance mto-extension-vault-community-<tenant>.eso  → eso slice
@@ -110,3 +109,67 @@ Values that matter (bootstrap chart):
 t-op-v2 pulls the **published** tenant chart, so `tenantValues` is the only way
 to set a tenant chart value on a cluster; editing the tenant chart's own
 `values.yaml` changes nothing.
+
+## Trust boundary
+
+**The `stakater.com/tenant` label on a namespace is what grants a tenant's
+Vault access.** The parent finds a tenant's namespaces by that label, and the
+tenant chart renders a Policy and Role for every annotated ServiceAccount in
+them. So anyone who can set `stakater.com/tenant: X` on a namespace can give
+their own ServiceAccounts tenant X's Vault access.
+
+Keep that label under the platform's control: only MTO (and cluster admins)
+may set or change it. Tenant users must not be able to label or relabel
+namespaces — in particular they must not hold `patch` or `update` on
+`namespaces` at cluster scope. MTO's own namespace handling is built on the same
+label, so this is the same rule MTO already needs.
+
+Each role binds its namespace by **name and tenant label**, so a namespace name
+that another tenant creates later, after the first one is deleted, gets nothing:
+Kubernetes does not reserve namespace names per tenant.
+
+Inside a tenant, the ServiceAccount annotations decide which app gets which
+access. Anyone who can annotate a ServiceAccount in a tenant namespace can
+request that tenant's access for it, up to the `admin` role.
+
+## Workload access
+
+Access is opt-in per ServiceAccount, with annotations:
+
+| Annotation | Value | Effect |
+|---|---|---|
+| `vault.stakater.com/kv` | `"true"` | The app's own KV prefix. |
+| `vault.stakater.com/role` | `viewer` \| `editor` \| `admin` \| `audit-read` | Required with `kv`. How much access. |
+| `vault.stakater.com/app` | name | The app that owns the prefix. Default: the ServiceAccount name. |
+
+The KV layout inside the tenant's `<tenant>/kv` mount:
+
+```text
+<tenant>/kv/data/<env>/<namespace>/<app>/...    the app's own secrets
+```
+
+For each annotated ServiceAccount the chart renders a `Policy` and a
+`KubernetesAuthEngineRole` named `kv.<tenant>.<namespace>.<sa>`, on the
+tenant's mount `auth/<tenant>/kubernetes/workloads`, and a ConfigMap
+`vault-config-<sa>` in the workload namespace:
+
+```text
+VAULT_ADDR, VAULT_CACERT (with vaultCABundle), VAULT_NAMESPACE="" (Community has none),
+VAULT_K8S_MOUNT=<tenant>/kubernetes/workloads, VAULT_K8S_ROLE,
+VAULT_KV_APP, VAULT_KV_APP_PATH=<tenant>/kv/data/<env>/<namespace>/<app>/, VAULT_KV_APP_META_PATH
+```
+
+The keys are the Enterprise extension's. `VAULT_NAMESPACE` is present and
+empty, and every path starts with the tenant, so a client written for
+Enterprise works unchanged.
+
+Every policy passes the **scope check** before it is rendered: one-line
+`path "…" { capabilities = [...] }` stanzas, no `sudo`, no `+`, and every path
+inside `<tenant>/kv/{data,metadata,delete,undelete,destroy}/<env>/`. A policy
+that fails it fails the render. A `roleCaps` entry with `sudo` fails too.
+
+A misconfigured ServiceAccount gets a ConfigMap `vault-config-<sa>.error` that
+says what is wrong, and nothing else. Reported per ServiceAccount rather than
+failing the render, so one namespace's mistake does not stop the tenant's other
+namespaces. An unknown `vault.stakater.com/` key is an error, not ignored; so
+are `transit` and `pki`, which this extension does not support.

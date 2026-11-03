@@ -15,11 +15,13 @@ Facts are cited to `../vault-community-baseline.md` by row.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-port-the-enterprise-extension.md) | Port the Enterprise extension: same contract, same charts shape, VCO CRs; a separate repo for now | Accepted |
-| [0002](0002-tenant-is-a-mount-not-a-namespace.md) | A tenant is a mount prefix: `<tenant>/kv` and auth mounts `auth/<tenant>/…`, the Enterprise paths with the tenant in front | Accepted |
+| [0002](0002-tenant-is-a-mount-not-a-namespace.md) | A tenant is a mount prefix: `<tenant>/kv` and auth mounts `auth/<tenant>/…`, the Enterprise paths with the tenant in front | Superseded by ADR-0007 |
 | [0003](0003-policy-is-the-wall-so-check-every-policy.md) | Per-identity policies, never one tenant-wide policy; every rendered policy and role passes a scope check, also at admission | Accepted |
 | [0004](0004-tenants-never-administer-vault.md) | No role may manage policies, mounts, auth or identity | Accepted |
 | [0005](0005-data-outlives-definitions.md) | Deleting a tenant revokes access and keeps its mount; VCO is denied mount deletion | Accepted |
-| [0006](0006-bound-the-operator-by-name.md) | VCO's Vault policy is narrowed by object name and mount type; what VCO is asked is bounded at admission | Accepted |
+| [0006](0006-bound-the-operator-by-name.md) | VCO's Vault policy is narrowed by object name and mount type; what VCO is asked is bounded at admission | Superseded by ADR-0008 |
+| [0007](0007-share-roles-on-the-tenants-own-mount.md) | A tenant is a mount prefix, and its share roles live on its own `auth/<tenant>/kubernetes/workloads` | Accepted |
+| [0008](0008-bound-the-operator-share-roles-on-tenant-mounts.md) | As ADR-0006, with `share.*` roles on each tenant's own mount | Accepted |
 
 All were accepted on 2026-11-03, after story C.0 confirmed the Vault and VCO
 behaviour they rest on (`spikes/c0-findings.md`).

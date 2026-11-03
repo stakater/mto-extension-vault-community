@@ -25,9 +25,9 @@ vco:
   role: vco-admin
   serviceAccount: vco-admin
 
-# The kubernetes auth mount workloads log in with. VCO mounts it at
-# <tenant>/<path>/<name> for each tenant, and at <shared>/<path>/<name> for
-# the share roles: auth/team-a/kubernetes/workloads.
+# The kubernetes auth mount workloads log in with, one per tenant: VCO mounts
+# it at auth/<tenant>/<path>/<name>, for example auth/team-a/kubernetes/workloads.
+# The tenant's share roles live on it too (ADR-0007).
 kubernetesAuth:
   path: kubernetes
   name: workloads
@@ -61,8 +61,8 @@ parent:
   env: dev
   vaultServer: http://vault.vault.svc.cluster.local:8200
   tenantLabelKey: stakater.com/tenant
-  # The prefix of the shared mount shared/kv and of the share roles' auth
-  # mount auth/shared/kubernetes/workloads. A reserved tenant name.
+  # The prefix of the shared mount shared/kv, where cross-tenant shares land.
+  # A reserved tenant name.
   sharedTenantName: shared
   # Tenant names the parent skips because the platform already uses them as
   # the first segment of a secrets or auth mount. Vault refuses a mount nested

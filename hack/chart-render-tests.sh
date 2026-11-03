@@ -12,6 +12,35 @@
 #     everything cannot pass.
 #   - Report line 1 of a failure: infrastructure errors print first.
 #
+# Tenant chart:
+#   golden       — component=all is object-set identical to the committed golden.
+#   disjoint     — no object is emitted by both slices (two TIs would fight over it via SSA).
+#   union        — core ∪ eso emits exactly the all set.
+#   empty        — the eso slice with no opt-ins renders zero objects.
+#   badvalue     — an unknown component fails the render with the helper's message.
+#   namebudget   — a sliced render fails when the TI name would exceed 63 chars;
+#                  component=all is exempt.
+#   policyscope  — every Policy of every fixture passes the scope check, read from
+#                  the rendered output: one-line stanzas, no sudo, no +, every path
+#                  inside its tenant's mount (or its share), the tenant segment
+#                  closed by /. A self-test proves the checker flags a bad line,
+#                  and a hostile roleCaps fails the render itself.
+#   rolebind     — every workload role binds exactly its own policy, its tenant's
+#                  mount, its own ServiceAccount, and a selector of exactly its
+#                  namespace name and the tenant label: a namespace name reused by
+#                  another tenant gets nothing.
+#   mountagree   — the auth mount path agrees across the AuthEngineMount, its
+#                  config, every role and VAULT_K8S_MOUNT; VAULT_NAMESPACE is empty.
+#   guards       — every misconfigured ServiceAccount gets an error ConfigMap and
+#                  nothing else; the correct ones in another namespace still
+#                  render; hostile values never reach a spec.
+#   tokenseconds — token durations are integers on every role; a duration string
+#                  fails the render with the schema removed, and the schema
+#                  rejects it too.
+#   tokentype    — every role pins tokenType; batch + period fails.
+#   namecollide  — no two objects of one render share an identity, and parts
+#                  that glued to one name with hyphens now give distinct names.
+#
 # Bootstrap and parent:
 #   emission     — the parent emits one TI per enabled slice per tenant with a
 #                  labelled namespace, none for a tenant without one, and a roster
@@ -21,11 +50,12 @@
 #                  platform uses (sys, auth, token, VCO's login mount,
 #                  agent-registry, parent.reservedPaths) is skipped and listed in
 #                  the skipped-tenants ConfigMap; a valid name beside them renders.
-#   parentmounts — the parent's VCO objects are exactly <t>-kv per valid tenant,
-#                  shared-kv, shared-kubernetes and shared-kubernetes-config, at
-#                  the paths <t>/kv, shared/kv and auth/shared/kubernetes/workloads.
-#   notargetns   — no render emits a Namespace CR or a targetNamespace, and every
-#                  VCO CR logs in the same way. Vault Community has one namespace.
+#   parentmounts — the parent's VCO objects are exactly <t>-kv per valid tenant
+#                  and shared-kv, at <t>/kv and shared/kv. There is no shared auth
+#                  mount: share roles live on each tenant's own (ADR-0007).
+#   notargetns   — no render, tenant chart or parent, emits a Namespace CR, a
+#                  targetNamespace or a Vault login namespace, and every VCO CR
+#                  logs in the same way. Vault Community has one namespace.
 #   templateset  — the bootstrap installs a child Template for exactly the enabled
 #                  slices, and every templateRef the parent emits resolves.
 #   rbacgate     — `create` on ESO kinds exists only while ESO is enabled; the reap
@@ -34,7 +64,8 @@
 #                  ClusterRole (list only) and the configNamespace Role (all verbs).
 #   toggles      — near-miss toggle values fail, via the schema with templates
 #                  stripped AND via the helpers with the schema removed.
-#   nullfields   — no rendered field is YAML null.
+#   nullfields   — no rendered field is YAML null, in the bootstrap, the parent,
+#                  or the tenant chart with no workloads.
 #   parentplumb  — install-wide knobs reach the child valuesTemplate; an unset
 #                  token block is omitted, not empty.
 #   versionpin   — the bootstrap's tenantChart.version equals the tenant chart
@@ -42,16 +73,19 @@
 #   outputnames  — output and field names are unique within every Template.
 #                  t-op-v2 rejects a field name repeated across outputs and
 #                  then resolves none of them (OutputsResolved=False).
-#   tenantname   — a tenant named 1234 renders in the parent with every name,
-#                  label value and path as a string.
-#   datalifetime — the parent renders the kv mount for every valid Tenant,
-#                  including one with no labelled namespace, so deleting a
-#                  tenant's last namespace cannot delete its Vault data.
+#   tenantname   — a tenant named 1234 renders, in the tenant chart and the
+#                  parent, with every name, label value and path as a string; a
+#                  name that is not a DNS label fails the tenant chart.
+#   datalifetime — the tenant chart renders no kv mount; the parent renders it
+#                  for every valid Tenant, including one with no labelled
+#                  namespace, so deleting a tenant's last namespace cannot
+#                  delete its Vault data.
 #   tenantvalues — a tenantValues key the bootstrap owns is rejected, and a value
 #                  containing "{{" is rejected.
 #   ssoissuer    — the bootstrap refuses SSO without an issuer URL.
 #   removedkeys  — tenantValues still setting a removed key fails.
-#   listingvis   — every mount the parent renders sets config.listingVisibility.
+#   listingvis   — every mount the tenant chart and the parent render sets
+#                  config.listingVisibility.
 #                  Unset, VCO's finalizer update sends "" and its CRD enum refuses
 #                  it: the CR gets no finalizer, and deleting it never deletes the
 #                  mount in Vault.
@@ -65,6 +99,12 @@
 #
 # The parent gotemplate is rendered through helm's tpl — an approximation of
 # t-op-v2's text/template+Sprig engine that is exact for the constructs it uses.
+#
+# Regenerating the golden after an INTENTIONAL chart change:
+#   helm template mto-extension-vault-community charts/mto-extension-vault-community \
+#     -n vault-config -f hack/render-fixtures/values-full.yaml \
+#     | yq ea -P '[.] | sort_by(.apiVersion + "|" + .kind + "|" + (.metadata.namespace // "") + "|" + .metadata.name) | .[] | sort_keys(..) | splitDoc' \
+#     > hack/render-fixtures/golden-all.yaml
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -75,6 +115,8 @@ HELM="${HELM:-$(command -v "$REPO_ROOT/bin/helm" || command -v helm)}"
 YQ="${YQ:-$(command -v "$REPO_ROOT/bin/yq" || command -v yq)}"
 NS=vault-config
 P=mto-extension-vault-community
+RELEASE=mto-extension-vault-community
+SLICES="core eso"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -110,6 +152,298 @@ cp -R "$BOOTSTRAP" "$WORK/noschema/boot"; rm "$WORK/noschema/boot/values.schema.
 cp -R "$BOOTSTRAP" "$WORK/notpl/boot"; rm -rf "$WORK/notpl/boot/templates"; mkdir "$WORK/notpl/boot/templates"
 cp -R "$CHART" "$WORK/noschema/tenant"; rm "$WORK/noschema/tenant/values.schema.json"
 cp -R "$CHART" "$WORK/notpl/tenant"; rm -rf "$WORK/notpl/tenant/templates"; mkdir "$WORK/notpl/tenant/templates"
+
+render() { # render <component> <valuesfile> [extra helm args...] -> manifest on stdout
+  local c="$1" v="$2"; shift 2
+  "$HELM" template "$RELEASE" "$CHART" -n "$NS" -f "$v" --set "component=$c" "$@"
+}
+# Sort docs by identity and normalise key order so comparisons are stable.
+normalize() {
+  "$YQ" ea -P '[.] | sort_by(.apiVersion + "|" + .kind + "|" + (.metadata.namespace // "") + "|" + .metadata.name) | .[] | sort_keys(..) | splitDoc'
+}
+identities() { # identities <normalized-file>
+  "$YQ" ea '[.apiVersion + "|" + .kind + "|" + (.metadata.namespace // "") + "|" + .metadata.name] | .[]' "$1" | sort
+}
+
+# ─── Tenant chart ────────────────────────────────────────────────────────────
+for c in all $SLICES; do
+  render "$c" "$FIXTURES/values-full.yaml" > "$WORK/$c.raw" 2>"$WORK/$c.err" \
+    || { echo "FAIL  setup — values-full component=$c did not render: $(first "$WORK/$c.err")"; exit 1; }
+  normalize < "$WORK/$c.raw" > "$WORK/$c.yaml"
+  identities "$WORK/$c.yaml" > "$WORK/$c.ids"
+done
+[ -s "$WORK/all.ids" ] || { echo "FAIL  setup — values-full rendered zero objects"; exit 1; }
+for fx in guards no-optins no-workloads; do
+  render all "$FIXTURES/values-$fx.yaml" > "$WORK/fx-$fx.raw" 2>"$WORK/fx.err" \
+    || { echo "FAIL  setup — values-$fx did not render: $(first "$WORK/fx.err")"; exit 1; }
+done
+
+# golden
+normalize < "$FIXTURES/golden-all.yaml" > "$WORK/golden.yaml"
+diff -u "$WORK/golden.yaml" "$WORK/all.yaml" > "$WORK/golden.diff" \
+  && check golden 0 \
+  || check golden 1 "component=all drifted from golden-all.yaml (see header for regeneration); first lines: $(head -6 "$WORK/golden.diff" | tail -3 | tr '\n' ' ')"
+
+# disjoint
+overlap="$(comm -12 "$WORK/core.ids" "$WORK/eso.ids")"
+[ -z "$overlap" ] && check disjoint 0 || check disjoint 1 "emitted by both slices: $overlap"
+
+# union
+sort "$WORK/core.ids" "$WORK/eso.ids" > "$WORK/union.ids"
+diff "$WORK/union.ids" "$WORK/all.ids" > /dev/null \
+  && check union 0 \
+  || check union 1 "core ∪ eso ≠ all: $(diff "$WORK/union.ids" "$WORK/all.ids" | head -4 | tr '\n' ' ')"
+
+# empty
+if render eso "$FIXTURES/values-no-optins.yaml" > "$WORK/empty.yaml" 2>"$WORK/empty.err"; then
+  # yqs, not `yq | grep -c || true`: a yq failure then stops the run instead of
+  # counting as zero objects, which is this check's pass condition.
+  yqs emptykinds 'select(.kind != null) | .kind' "$WORK/empty.yaml"
+  emptycount="$(lines "$emptykinds")"
+  [ "$emptycount" -eq 0 ] && check empty 0 || check empty 1 "expected 0 objects, got $emptycount"
+else
+  check empty 1 "render itself failed: $(first "$WORK/empty.err")"
+fi
+
+# badvalue
+if render bogus "$FIXTURES/values-full.yaml" > /dev/null 2> "$WORK/bogus.err"; then
+  check badvalue 1 "component=bogus rendered instead of failing"
+else
+  grep -q 'unknown component' "$WORK/bogus.err" \
+    && check badvalue 0 \
+    || check badvalue 1 "failed without the componentEnabled message: $(first "$WORK/bogus.err")"
+fi
+
+# namebudget — "mto-extension-vault-community-" is 30 chars: core ≤33, .eso ≤29.
+nb_ok=0; nb_detail=""
+t33="$(printf 'a%.0s' $(seq 1 33))"; t34="${t33}a"; t29="$(printf 'a%.0s' $(seq 1 29))"; t30="${t29}a"
+nb_case() { # nb_case <component> <tenant> <expect: ok|fail>
+  if render "$1" "$FIXTURES/values-no-optins.yaml" --set "tenant=$2" > /dev/null 2>"$WORK/nb.err"; then
+    [ "$3" = ok ] || { nb_ok=1; nb_detail="$nb_detail [$1 tenant len ${#2} rendered, expected fail]"; }
+  else
+    if [ "$3" = fail ]; then
+      grep -q 'label values cap at 63' "$WORK/nb.err" || { nb_ok=1; nb_detail="$nb_detail [$1 len ${#2} failed without the budget message: $(first "$WORK/nb.err")]"; }
+    else
+      nb_ok=1; nb_detail="$nb_detail [$1 tenant len ${#2} failed, expected ok: $(first "$WORK/nb.err")]"
+    fi
+  fi
+}
+nb_case core "$t33" ok; nb_case core "$t34" fail
+nb_case eso "$t29" ok;  nb_case eso "$t30" fail
+nb_case all "$t34" ok
+check namebudget "$nb_ok" "$nb_detail"
+
+# policyscope — the scope check, read from the rendered output (design §4).
+# scope_violations <manifest> <env> -> one line per violation, empty when clean
+scope_violations() {
+  local n line tenant fam parts p re env="$2"
+  local stanza='^path "([^"]+)" +\{ capabilities = \[("[a-z]+")(, "[a-z]+")*\] \}$'
+  "$YQ" e -N 'select(.kind == "Policy") | .metadata.name as $n | .spec.policy | split("\n") | .[] | $n + "	" + .' "$1" > "$WORK/ps.lines" \
+    || { echo "yq failed on $1"; return; }
+  while IFS=$'\t' read -r n line; do
+    line="$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' <<<"$line")"
+    [ -z "$line" ] && continue
+    case "$line" in \#*) continue ;; esac
+    IFS=. read -r -a parts <<<"$n"
+    fam="${parts[0]}"; tenant="${parts[1]:-}"
+    if ! [[ "$line" =~ $stanza ]]; then echo "$n: not a one-line stanza: $line"; continue; fi
+    p="${BASH_REMATCH[1]}"
+    case "$line" in *'"sudo"'*) echo "$n: sudo: $line" ;; esac
+    case "$p" in *+*) echo "$n: + in $p" ;; esac
+    case "$fam/${#parts[@]}" in
+      kv/4|sso/3) re="^$tenant/kv/(data|metadata|delete|undelete|destroy)/$env/([a-z0-9_][-a-z0-9_.]*/)*\*\$"
+                  [ "$fam" = sso ] && [ "$p" = "$tenant/kv/metadata" ] && continue ;;
+      share/6)    if [ "${parts[4]}" = out ]; then re="^shared/kv/(data|metadata)/$env/from-$tenant/to-${parts[5]}/\*\$"
+                  else re="^shared/kv/(data|metadata)/$env/from-${parts[5]}/to-$tenant/\*\$"
+                    case "$line" in *'"create"'*|*'"update"'*|*'"patch"'*|*'"delete"'*) echo "$n: an import writes: $line" ;; esac
+                  fi ;;
+      *) echo "$n: in no name family"; continue ;;
+    esac
+    [[ "$p" =~ $re ]] || echo "$n: $p is outside $re"
+  done < "$WORK/ps.lines"
+}
+ps_ok=0; ps_detail=""
+# Self-test: the checker flags each kind of bad line and passes a good one.
+cat > "$WORK/ps-self.yaml" <<'YAML'
+kind: Policy
+metadata: { name: kv.team.ns.sa }
+spec:
+  policy: |
+    # a comment is fine
+    path "team/kv/data/dev/ns/sa/*" { capabilities = ["read"] }
+    path "team-a/kv/data/dev/ns/sa/*" { capabilities = ["read"] }
+    path "team*" { capabilities = ["read"] }
+    path "team/kv/data/dev/+/sa/*" { capabilities = ["read"] }
+    path "team/kv/data/dev/ns/sa/*" { capabilities = ["read", "sudo"] }
+    path "team/kv/config" { capabilities = ["update"] }
+    path "team/kv/data/dev/ns/sa/*" {
+      capabilities = ["read"] }
+YAML
+self="$(scope_violations "$WORK/ps-self.yaml" dev)"
+for want in 'team-a/kv/data/dev/ns/sa/\* is outside' 'team\* is outside' '\+ in team/kv/data/dev/\+/sa' 'sudo: ' 'team/kv/config is outside' 'not a one-line stanza: path "team/kv/data/dev/ns/sa/\*" \{$' 'not a one-line stanza: capabilities'; do
+  grep -qE "$want" <<<"$self" || { ps_ok=1; ps_detail="$ps_detail [self-test: no violation matching '$want' in: $(tr '\n' '|' <<<"$self")]"; }
+done
+grep -q 'team/kv/data/dev/ns/sa/\* is outside' <<<"$self" && { ps_ok=1; ps_detail="$ps_detail [self-test: a good line was flagged]"; }
+for f in all.raw fx-guards.raw fx-no-optins.raw fx-no-workloads.raw; do
+  v="$(scope_violations "$WORK/$f" dev)"
+  [ -z "$v" ] || { ps_ok=1; ps_detail="$ps_detail [$f: $(tr '\n' '|' <<<"$v")]"; }
+done
+yqs npol 'select(.kind == "Policy") | .metadata.name' "$WORK/all.raw"
+[ "$(lines "$npol")" -ge 4 ] || { ps_ok=1; ps_detail="$ps_detail [values-full rendered $(lines "$npol") policies — the check proves nothing]"; }
+# The render-time guard: a role capability list with sudo, and an env that
+# would put a wildcard into the path, fail the render itself.
+printf 'roleCaps:\n  editor: %s\n' "'[\"read\", \"sudo\"]'" > "$WORK/ps-sudo.yaml"
+for c in "-f $WORK/ps-sudo.yaml:grants sudo" "--set env=dev/*:is not a DNS label"; do
+  if render core "$FIXTURES/values-full.yaml" ${c%%:*} > /dev/null 2>"$WORK/ps.err"; then
+    ps_ok=1; ps_detail="$ps_detail [${c%%:*} rendered]"
+  else
+    grep -q -- "${c#*:}" "$WORK/ps.err" || { ps_ok=1; ps_detail="$ps_detail [${c%%:*} failed elsewhere: $(first "$WORK/ps.err")]"; }
+  fi
+done
+check policyscope "$ps_ok" "$ps_detail"
+
+# rolebind
+rb_ok=0; rb_detail=""
+for f in all.raw fx-guards.raw; do
+  yqs roles 'select(.kind == "KubernetesAuthEngineRole") | .metadata.name + " " + .spec.name + " " + (.spec.policies | join(",")) + " " + .spec.path + " " + (.spec.targetServiceAccounts | join(",")) + " " + (.spec.targetNamespaces.targetNamespaceSelector.matchLabels | to_entries | map(.key + "=" + .value) | sort | join(",")) + " " + ((.spec.targetNamespaces | has("targetNamespaces")) | tostring)' "$WORK/$f"
+  [ -n "$roles" ] || { rb_ok=1; rb_detail="$rb_detail [$f: no roles — the check proves nothing]"; continue; }
+  while read -r meta name pols path sas sel list; do
+    IFS=. read -r -a parts <<<"$name"
+    t="${parts[1]}"; ns="${parts[2]}"; sa="${parts[3]}"
+    want="$name $name $name $t/kubernetes/workloads $sa kubernetes.io/metadata.name=$ns,stakater.com/tenant=$t false"
+    got="$meta $name $pols $path $sas $sel $list"
+    [ "$got" = "$want" ] || rb_detail="$rb_detail [$f: got '$got' want '$want']"
+  done <<<"$roles"
+done
+[ -z "$rb_detail" ] || rb_ok=1
+check rolebind "$rb_ok" "$rb_detail"
+
+# mountagree
+ma_ok=0; ma_detail=""
+yqs m_auth 'select(.kind == "AuthEngineMount" and .spec.type == "kubernetes") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
+yqs m_cfg 'select(.kind == "KubernetesAuthEngineConfig") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
+yqs m_roles 'select(.kind == "KubernetesAuthEngineRole") | .spec.path' "$WORK/all.raw"
+yqs m_cms 'select(.kind == "ConfigMap" and (.data | has("VAULT_K8S_MOUNT"))) | .data.VAULT_K8S_MOUNT' "$WORK/all.raw"
+for pair in "AuthEngineMount:$m_auth" "KubernetesAuthEngineConfig:$m_cfg" "roles:$(sort -u <<<"$m_roles")" "VAULT_K8S_MOUNT:$(sort -u <<<"$m_cms")"; do
+  [ "${pair#*:}" = team-a/kubernetes/workloads ] || { ma_ok=1; ma_detail="$ma_detail [${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
+done
+yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-")) and (.data | has("VAULT_K8S_MOUNT"))) | .metadata.name + "=" + (.data.VAULT_NAMESPACE | tostring)' "$WORK/all.raw"
+[ -n "$vns" ] || { ma_ok=1; ma_detail="$ma_detail [no vault-config ConfigMap — the check proves nothing]"; }
+bad="$(grep -v '=$' <<<"$vns" || true)"
+[ -z "$bad" ] || { ma_ok=1; ma_detail="$ma_detail [VAULT_NAMESPACE not empty: $(tr '\n' ' ' <<<"$bad")]"; }
+check mountagree "$ma_ok" "$ma_detail"
+
+# guards
+gd_ok=0; gd_detail=""
+for pair in \
+  "g-role-only:kv is not" "g-no-role:role is not set" "g-bad-role:is not a known role" \
+  "g-transit:is not supported" "g-injection:is not a valid app name" "g-wildcard:is not a valid app name" \
+  "g-reserved:is not a valid app name" "g-claimed:claimed by more than one" "g-claimer:claimed by more than one" \
+  "default:cannot be granted Vault access" "g-unknown-key:unknown annotation" "g-bad-bool:must be" \
+  "g-app-only:no app identity is registered" "g.dotted:cannot be used with Vault"; do
+  sa="${pair%%:*}"; msg="${pair#*:}"
+  yqs err "select(.kind == \"ConfigMap\" and .metadata.name == \"vault-config-$sa.error\") | .data.ERROR" "$WORK/fx-guards.raw"
+  grep -q -- "$msg" <<<"$err" \
+    || { gd_ok=1; gd_detail="$gd_detail [$sa: no error ConfigMap saying '$msg']"; }
+  yqs hit "select(.kind == \"Policy\" and (.metadata.name | test(\"[.]$sa\$\"))) | .metadata.name" "$WORK/fx-guards.raw"
+  [ -n "$hit" ] \
+    && { gd_ok=1; gd_detail="$gd_detail [$sa: a Policy rendered despite the error]"; }
+done
+# Positive controls in the other namespace.
+for sa in good-sa hostile-sa; do
+  yqs hit "select(.kind == \"Policy\" and .metadata.name == \"kv.team-a.team-a-prod.$sa\") | .metadata.name" "$WORK/fx-guards.raw"
+  [ -n "$hit" ] \
+    || { gd_ok=1; gd_detail="$gd_detail [$sa: correct SA rendered no Policy — one namespace's error froze another]"; }
+done
+# Hostile values never reach a rendered spec, and the error ConfigMap cannot be forged.
+yqs strs 'select(.kind != "ConfigMap") | .. | select(tag == "!!str")' "$WORK/fx-guards.raw"
+[ -n "$strs" ] || { gd_ok=1; gd_detail="$gd_detail [no strings extracted — the hostile-value check proves nothing]"; }
+grep -qE 'capabilities = \["sudo"\]|\.\./|forged|team-b/' <<<"$strs" \
+  && { gd_ok=1; gd_detail="$gd_detail [a hostile value reached a non-ConfigMap object]"; }
+yqs forged 'select(.kind == "ConfigMap") | has("spec")' "$WORK/fx-guards.raw"
+grep -qx true <<<"$forged" \
+  && { gd_ok=1; gd_detail="$gd_detail [an error ConfigMap carries a forged top-level field]"; }
+check guards "$gd_ok" "$gd_detail"
+
+# tokenseconds
+tsx_ok=0; tsx_detail=""
+yqs nonint 'select(.kind == "KubernetesAuthEngineRole") | .spec | to_entries | .[] | select(.key | test("^token(TTL|MaxTTL|Period)$")) | select(.value | tag != "!!int") | .key' "$WORK/all.raw"
+[ -z "$nonint" ] || { tsx_ok=1; tsx_detail="$tsx_detail [non-integer token fields: $nonint]"; }
+yqs ints 'select(.kind == "KubernetesAuthEngineRole") | .spec.tokenTTL' "$WORK/all.raw"
+[ "$(sort -u <<<"$ints")" = 3600 ] || { tsx_ok=1; tsx_detail="$tsx_detail [tokenTTL not plumbed as 3600: '$ints']"; }
+if "$HELM" template x "$WORK/noschema/tenant" -n "$NS" -f "$FIXTURES/values-full.yaml" --set-string token.ttl=1h > /dev/null 2>"$WORK/tsx.err"; then
+  tsx_ok=1; tsx_detail="$tsx_detail [token.ttl=1h rendered with the schema removed]"
+else
+  grep -q 'must be an integer number of seconds' "$WORK/tsx.err" || { tsx_ok=1; tsx_detail="$tsx_detail [token.ttl=1h failed without the helper message: $(first "$WORK/tsx.err")]"; }
+fi
+# The schema on its own, templates stripped.
+if "$HELM" template x "$WORK/notpl/tenant" -n "$NS" --set tenant=t --set-string token.ttl=1h > /dev/null 2>"$WORK/tsx.err"; then
+  tsx_ok=1; tsx_detail="$tsx_detail [the schema accepted token.ttl=1h]"
+fi
+"$HELM" template x "$WORK/notpl/tenant" -n "$NS" --set tenant=t --set token.ttl=900 > /dev/null 2>"$WORK/tsx.err" \
+  || { tsx_ok=1; tsx_detail="$tsx_detail [the schema refused token.ttl=900: $(first "$WORK/tsx.err")]"; }
+check tokenseconds "$tsx_ok" "$tsx_detail"
+
+# tokentype
+tt_ok=0; tt_detail=""
+yqs rolenames 'select(.kind == "KubernetesAuthEngineRole") | .metadata.name' "$WORK/all.raw"
+yqs roletypes 'select(.kind == "KubernetesAuthEngineRole") | .spec.tokenType' "$WORK/all.raw"
+nroles="$(lines "$rolenames")"
+typed="$(lines "$(grep -x service <<<"$roletypes" || true)")"
+[ "$nroles" -gt 0 ] || { tt_ok=1; tt_detail="$tt_detail [no roles rendered]"; }
+[ "$typed" = "$nroles" ] || { tt_ok=1; tt_detail="$tt_detail [$typed of $nroles roles pin tokenType service]"; }
+if "$HELM" template x "$WORK/noschema/tenant" -n "$NS" -f "$FIXTURES/values-full.yaml" --set token.type=batch > /dev/null 2>"$WORK/tt.err"; then
+  tt_ok=1; tt_detail="$tt_detail [batch + period rendered]"
+else
+  grep -q 'a batch token cannot be renewed' "$WORK/tt.err" || { tt_ok=1; tt_detail="$tt_detail [batch + period failed elsewhere: $(first "$WORK/tt.err")]"; }
+fi
+"$HELM" template x "$CHART" -n "$NS" -f "$FIXTURES/values-full.yaml" --set token.type=batch --set token.period=0 > /dev/null 2>"$WORK/tt.err" \
+  || { tt_ok=1; tt_detail="$tt_detail [batch without period rejected: $(first "$WORK/tt.err")]"; }
+check tokentype "$tt_ok" "$tt_detail"
+
+# namecollide
+nc_ok=0; nc_detail=""
+# nc_ids <manifest> <ids-out>: sorted identities. On its own line, so a yq failure
+# stops the run instead of reading as "no duplicates".
+nc_ids() {
+  normalize < "$1" > "$1.norm" || { echo "FAIL  infra — yq failed normalizing $1"; exit 1; }
+  identities "$1.norm" > "$2" || { echo "FAIL  infra — yq failed listing identities of $1"; exit 1; }
+}
+for fx in full guards no-optins no-workloads; do
+  render all "$FIXTURES/values-$fx.yaml" > "$WORK/nc.yaml" 2>"$WORK/nc.err" || { nc_ok=1; nc_detail="$nc_detail [$fx: render failed]"; continue; }
+  nc_ids "$WORK/nc.yaml" "$WORK/nc.ids"
+  dups="$(uniq -d "$WORK/nc.ids" | tr '\n' ' ')"
+  [ -z "$dups" ] || { nc_ok=1; nc_detail="$nc_detail [$fx: duplicate identities: $dups]"; }
+done
+cat > "$WORK/coll.yaml" <<'YAML'
+tenant: t
+serviceAccounts:
+  - metadata: {name: api-x, namespace: t-web, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}
+  - metadata: {name: x, namespace: t-web-api, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: viewer}}
+YAML
+render all "$WORK/coll.yaml" > "$WORK/coll.out" 2>"$WORK/coll.err" || { nc_ok=1; nc_detail="$nc_detail [collision fixture failed to render: $(first "$WORK/coll.err")]"; }
+yqs pnames 'select(.kind == "Policy") | .metadata.name' "$WORK/coll.out"
+[ "$(sort -u <<<"$pnames" | grep -c .)" = 2 ] || { nc_ok=1; nc_detail="$nc_detail [t-web/api-x and t-web-api/x: $(tr '\n' ' ' <<<"$pnames")]"; }
+# nc_pair <label> <values-a> <values-b>: two tenants' core renders, which both
+# land in configNamespace, share no identity. Each must render a Policy, or the
+# check passes on an empty render.
+nc_pair() {
+  local pa pb d
+  render core "$2" > "$WORK/nca.yaml" 2>"$WORK/nca.err" || { nc_ok=1; nc_detail="$nc_detail [$1: first render failed: $(first "$WORK/nca.err")]"; return; }
+  render core "$3" > "$WORK/ncb.yaml" 2>"$WORK/ncb.err" || { nc_ok=1; nc_detail="$nc_detail [$1: second render failed: $(first "$WORK/ncb.err")]"; return; }
+  yqs pa 'select(.kind == "Policy") | .metadata.name' "$WORK/nca.yaml"
+  yqs pb 'select(.kind == "Policy") | .metadata.name' "$WORK/ncb.yaml"
+  [ -n "$pa" ] && [ -n "$pb" ] || { nc_ok=1; nc_detail="$nc_detail [$1: a render has no Policy — the check proves nothing]"; return; }
+  cat "$WORK/nca.yaml" "$WORK/ncb.yaml" > "$WORK/ncab.yaml"
+  nc_ids "$WORK/ncab.yaml" "$WORK/ncab.ids"
+  d="$(uniq -d "$WORK/ncab.ids" | tr '\n' ' ')"
+  [ -z "$d" ] || { nc_ok=1; nc_detail="$nc_detail [$1: two tenants render the same objects: $d]"; }
+}
+# Across tenants: tenant a, namespace b-c vs tenant a-b, namespace c.
+printf 'tenant: a\nserviceAccounts:\n  - metadata: {name: d, namespace: b-c, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/xa.yaml"
+printf 'tenant: a-b\nserviceAccounts:\n  - metadata: {name: d, namespace: c, annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor}}\n' > "$WORK/xb.yaml"
+nc_pair "a/b-c vs a-b/c" "$WORK/xa.yaml" "$WORK/xb.yaml"
+check namecollide "$nc_ok" "$nc_detail"
 
 # ─── The parent gotemplate, through a shim chart ─────────────────────────────
 mkdir -p "$WORK/shim/templates" "$WORK/shim/files"
@@ -219,8 +553,7 @@ check reserved "$rs_ok" "$rs_detail"
 # parentmounts
 pm_ok=0; pm_detail=""
 yqs pkinds 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .kind + "/" + .metadata.name + " " + .spec.path + "/" + .spec.name' "$WORK/emit-enabled.yaml"
-want_pm="$(printf '%s\n' "SecretEngineMount/shared-kv shared/kv" "AuthEngineMount/shared-kubernetes shared/kubernetes/workloads" \
-  "KubernetesAuthEngineConfig/shared-kubernetes-config shared/kubernetes/workloads" \
+want_pm="$(printf '%s\n' "SecretEngineMount/shared-kv shared/kv" \
   "SecretEngineMount/team-a-kv team-a/kv" "SecretEngineMount/team-b-kv team-b/kv" \
   "SecretEngineMount/empty-tenant-kv empty-tenant/kv" "SecretEngineMount/1234-kv 1234/kv" | sort | tr '\n' ' ')"
 [ "$(sort <<<"$pkinds" | tr '\n' ' ')" = "$want_pm" ] || { pm_ok=1; pm_detail="$pm_detail [parent VCO objects: want $want_pm got $(sort <<<"$pkinds" | tr '\n' ' ')]"; }
@@ -230,17 +563,11 @@ yqs pmlabels 'select(.kind == "SecretEngineMount" and .metadata.name != "shared-
 for t in team-a team-b empty-tenant 1234; do
   grep -qx "$t-kv=$t" <<<"$pmlabels" || { pm_ok=1; pm_detail="$pm_detail [$t-kv does not carry its tenant label]"; }
 done
-yqs pmreviewer 'select(.kind == "KubernetesAuthEngineConfig" and .spec.tokenReviewerServiceAccount != null) | .metadata.name' "$WORK/emit-enabled.yaml"
-[ -z "$pmreviewer" ] || { pm_ok=1; pm_detail="$pm_detail [the default config names a reviewer: $pmreviewer]"; }
-emit enabled --set parameters.tokenReviewerServiceAccount=vault-reviewer > "$WORK/emit-rev.yaml" 2>"$WORK/emit.err" \
-  || { pm_ok=1; pm_detail="$pm_detail [parent with a reviewer failed: $(first "$WORK/emit.err")]"; }
-yqs pmreviewer 'select(.kind == "KubernetesAuthEngineConfig") | .spec.tokenReviewerServiceAccount.name' "$WORK/emit-rev.yaml"
-[ "$pmreviewer" = vault-reviewer ] || { pm_ok=1; pm_detail="$pm_detail [tokenReviewerServiceAccount not plumbed: '$pmreviewer']"; }
 check parentmounts "$pm_ok" "$pm_detail"
 
-# notargetns — every render this harness makes, parent and bootstrap
+# notargetns — every render this harness makes: tenant chart, parent and bootstrap
 nt_ok=0; nt_detail=""
-for f in "$WORK"/emit-*.yaml "$WORK/boot-default.yaml"; do
+for f in "$WORK"/emit-*.yaml "$WORK/boot-default.yaml" "$WORK"/*.raw; do
   yqs ns 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1" and .kind == "Namespace") | .metadata.name' "$f"
   [ -z "$ns" ] || { nt_ok=1; nt_detail="$nt_detail [$(basename "$f") renders a Namespace CR: $ns]"; }
   yqs tns '.. | select(has("targetNamespace")) | .targetNamespace' "$f"
@@ -255,6 +582,13 @@ grep -q '"role":"vco-role"' <<<"$pauth" && grep -q '"name":"vco-sa"' <<<"$pauth"
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
   nt_ok=1; nt_detail="$nt_detail [the bootstrap accepted vco.namespace]"
 fi
+if render core "$FIXTURES/values-full.yaml" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
+  nt_ok=1; nt_detail="$nt_detail [the tenant chart accepted vco.namespace]"
+else
+  grep -q 'Vault Community Edition has no namespaces' "$WORK/nt.err" || { nt_ok=1; nt_detail="$nt_detail [vco.namespace failed elsewhere: $(first "$WORK/nt.err")]"; }
+fi
+yqs tauth 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.authentication | to_json(0)' "$WORK/all.raw"
+[ "$(sort -u <<<"$tauth" | grep -c .)" = 1 ] || { nt_ok=1; nt_detail="$nt_detail [the tenant chart's CRs log in more than one way: $(sort -u <<<"$tauth" | tr '\n' ' ')]"; }
 check notargetns "$nt_ok" "$nt_detail"
 
 # templateset
@@ -307,7 +641,7 @@ check rbacgate "$rg_ok" "$rg_detail"
 
 # rbaccover — every redhatcop kind any render emits, lower-cased plural
 rc_ok=0; rc_detail=""
-{ for f in "$WORK"/emit-enabled.yaml "$WORK"/tenant-*.raw; do
+{ for f in "$WORK"/emit-enabled.yaml "$WORK"/all.raw; do
     [ -f "$f" ] || continue
     "$YQ" e -N 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .kind' "$f"
   done; } | sort -u > "$WORK/rendered-kinds"
@@ -356,8 +690,13 @@ printf 'kind: Probe\nmetadata:\n  name: clean\nspec:\n  domains:\n    - a\n' > "
 printf 'kind: Probe\nmetadata:\n  name: dirty\nspec:\n  domains:\n' > "$WORK/nf-dirty.yaml"
 [ -z "$(nullfield_paths "$WORK/nf-clean.yaml")" ] || nf_detail="$nf_detail [self-check: false positive on a clean probe]"
 [ "$(nullfield_paths "$WORK/nf-dirty.yaml")" = "Probe/dirty spec.domains" ] || nf_detail="$nf_detail [self-check: the detector cannot see a known null]"
-for f in boot-default emit-enabled emit-disabled; do
-  nf_out="$(nullfield_paths "$WORK/$f.yaml")" || { nf_detail="$nf_detail [$f: yq failed]"; continue; }
+for c in all core eso; do
+  render "$c" "$FIXTURES/values-no-workloads.yaml" > "$WORK/nw-$c.yaml" 2>"$WORK/nw.err" \
+    || { nf_detail="$nf_detail [no-workloads $c: render failed: $(first "$WORK/nw.err")]"; continue; }
+done
+for f in boot-default.yaml emit-enabled.yaml emit-disabled.yaml nw-all.yaml nw-core.yaml nw-eso.yaml all.raw; do
+  [ -f "$WORK/$f" ] || continue
+  nf_out="$(nullfield_paths "$WORK/$f")" || { nf_detail="$nf_detail [$f: yq failed]"; continue; }
   [ -z "$nf_out" ] || nf_detail="$nf_detail [$f: $(printf '%s' "$nf_out" | sort -u | tr '\n' ' ')]"
 done
 [ -z "$nf_detail" ] && check nullfields 0 || check nullfields 1 "rendered null field(s) — admission rejects these and fails the whole TI:$nf_detail"
@@ -388,9 +727,17 @@ pp_get() { "$YQ" e -N "$1" "$WORK/pp-values.yaml" 2>/dev/null; }
 [ "$(pp_get '.token.type')" = batch ] || { pp_ok=1; pp_detail="$pp_detail [token.type not plumbed]"; }
 [ "$(pp_get '.token.ttl | tag')" = '!!int' ] || { pp_ok=1; pp_detail="$pp_detail [token.ttl lost its integer type: $(pp_get '.token.ttl | tag')]"; }
 [ "$(pp_get '.sso.allowedRedirectUris[0]')" = 'https://console.example.com/oidc/callback' ] || { pp_ok=1; pp_detail="$pp_detail [allowedRedirectUris not plumbed]"; }
-# The plumbed name must reach the parent's share mount too.
-yqs ppname "select(.kind == \"Template\" and .metadata.name == \"$P-parent\") | .spec.parameters[] | select(.name == \"k8sAuthName\") | .value" "$WORK/pp.out"
-[ "$ppname" = apps ] || { pp_ok=1; pp_detail="$pp_detail [kubernetesAuth.name did not reach the parent: '$ppname']"; }
+# The plumbed values must survive the tenant chart, not only parse here.
+"$YQ" e -N '{"vco": .vco, "kubernetesAuth": .kubernetesAuth, "token": .token, "sso": {"allowedRedirectUris": .sso.allowedRedirectUris}}' "$WORK/pp-values.yaml" > "$WORK/pp-tenant-values.yaml"
+if render core "$FIXTURES/values-full.yaml" -f "$WORK/pp-tenant-values.yaml" --set token.period=0 > "$WORK/pp-tenant.out" 2>&1; then
+  yqs ppaths 'select(.kind == "KubernetesAuthEngineRole") | .spec.path' "$WORK/pp-tenant.out"
+  [ "$(sort -u <<<"$ppaths")" = team-a/kubernetes/apps ] \
+    || { pp_ok=1; pp_detail="$pp_detail [plumbed mount name did not reach the roles: '$(sort -u <<<"$ppaths" | tr '\n' ' ')']"; }
+  yqs pprole 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.authentication.role' "$WORK/pp-tenant.out"
+  [ "$(sort -u <<<"$pprole")" = my-role ] || { pp_ok=1; pp_detail="$pp_detail [plumbed vco.role did not reach the CRs: '$pprole']"; }
+else
+  pp_ok=1; pp_detail="$pp_detail [tenant chart rejected the plumbed values: $(first "$WORK/pp-tenant.out")]"
+fi
 # Counterweight: an unset token block is omitted, not emitted empty.
 "$YQ" e -N "select(.kind == \"Template\" and .metadata.name == \"$P\") | .spec.helm.valuesTemplate" "$WORK/boot-enabled.yaml" > "$WORK/pp-def.yaml"
 yqs hastok 'has("token")' "$WORK/pp-def.yaml"
@@ -420,16 +767,33 @@ for eso in enabled disabled; do
 done
 check outputnames "$on_ok" "$on_detail"
 
-# tenantname — the parent half; the tenant chart half arrives with its objects
+# tenantname
 tnm_ok=0; tnm_detail=""
-yqs pnonstr '(.. | select(has("value")) | .value | select(tag != "!!str")), (.. | select(has("matchLabels")) | .matchLabels[] | select(tag != "!!str")), (.metadata.name | select(tag != "!!str")), (.metadata.labels[]? | select(tag != "!!str")), (select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.path | select(tag != "!!str"))' "$WORK/emit-enabled.yaml"
+render core "$FIXTURES/values-full.yaml" --set-string tenant=1234 --set knownTenants=1234 > "$WORK/num.yaml" 2>"$WORK/num.err" \
+  || { tnm_ok=1; tnm_detail="$tnm_detail [tenant 1234 did not render: $(first "$WORK/num.err")]"; }
+yqs nonstr '(.. | select(has("name")) | .name | select(tag != "!!str")), (.metadata.labels[]? | select(tag != "!!str")), (.. | select(has("matchLabels")) | .matchLabels[] | select(tag != "!!str")), (select(.apiVersion == "redhatcop.redhat.io/v1alpha1" and .spec.path != null) | .spec.path | select(tag != "!!str"))' "$WORK/num.yaml"
+[ -z "$nonstr" ] || { tnm_ok=1; tnm_detail="$tnm_detail [tenant 1234 left non-string values: $(tr '\n' ' ' <<<"$nonstr")]"; }
+yqs numpolicies 'select(.kind == "Policy") | .metadata.name' "$WORK/num.yaml"
+[ -n "$numpolicies" ] || { tnm_ok=1; tnm_detail="$tnm_detail [tenant 1234 rendered no Policy — the check proves nothing]"; }
+for bad in has.dot Upper under_score; do
+  if render core "$FIXTURES/values-no-optins.yaml" --set-string "tenant=$bad" > /dev/null 2>"$WORK/tnm.err"; then
+    tnm_ok=1; tnm_detail="$tnm_detail [tenant $bad rendered]"
+  else
+    grep -q 'is not a DNS label' "$WORK/tnm.err" || { tnm_ok=1; tnm_detail="$tnm_detail [tenant $bad failed elsewhere: $(first "$WORK/tnm.err")]"; }
+  fi
+done
+yqs pnonstr '(.. | select(has("value")) | .value | select(tag != "!!str")), (.. | select(has("matchLabels")) | .matchLabels[] | select(tag != "!!str")), (.metadata.name | select(tag != "!!str")), (.metadata.labels[]? | select(tag != "!!str")), (select(.apiVersion == "redhatcop.redhat.io/v1alpha1" and .spec.path != null) | .spec.path | select(tag != "!!str"))' "$WORK/emit-enabled.yaml"
 [ -z "$pnonstr" ] || { tnm_ok=1; tnm_detail="$tnm_detail [parent left non-string values for tenant 1234: $(tr '\n' ' ' <<<"$pnonstr")]"; }
 yqs n1234 'select(.metadata.name == "1234-kv") | .spec.path' "$WORK/emit-enabled.yaml"
 [ "$n1234" = 1234 ] || { tnm_ok=1; tnm_detail="$tnm_detail [tenant 1234 rendered no mount — the check proves nothing]"; }
 check tenantname "$tnm_ok" "$tnm_detail"
 
-# datalifetime — the parent half
+# datalifetime
 dl_ok=0; dl_detail=""
+for c in all core; do
+  yqs data "select(.kind == \"SecretEngineMount\") | .kind + \"/\" + .metadata.name" "$WORK/$c.raw"
+  [ -z "$data" ] || { dl_ok=1; dl_detail="$dl_detail [tenant chart ($c) renders $data — it must come from the parent]"; }
+done
 yqs empt 'select(.kind == "SecretEngineMount" and .metadata.name == "empty-tenant-kv") | .spec.path' "$WORK/emit-enabled.yaml"
 [ "$empt" = empty-tenant ] || { dl_ok=1; dl_detail="$dl_detail [a tenant with no labelled namespace has no kv mount from the parent: '$empt']"; }
 yqs emptti 'select(.kind == "TemplateInstance" and (.metadata.name | test("empty-tenant"))) | .metadata.name' "$WORK/emit-enabled.yaml"
@@ -490,7 +854,7 @@ check removedkeys "$rk_ok" "$rk_detail"
 # listingvis — every mount sets config.listingVisibility to a value VCO's
 # CRD enum accepts.
 lv_ok=0; lv_detail=""
-for c in "parent:$WORK/emit-enabled.yaml:6"; do
+for c in "tenant:$WORK/all.raw:1" "parent:$WORK/emit-enabled.yaml:5"; do
   name="${c%%:*}"; rest="${c#*:}"; file="${rest%:*}"; min="${rest##*:}"
   yqs lvmounts 'select(.kind == "SecretEngineMount" or .kind == "AuthEngineMount") | .kind + "/" + .metadata.name' "$file"
   n=$(lines "$lvmounts")

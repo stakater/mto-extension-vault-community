@@ -1,0 +1,480 @@
+# Source: mto-extension-vault-community/templates/01-tenant-scaffolding.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: team-a-kubernetes
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  # VCO adds its finalizer with an update that sends every config field, and
+  # an unset listingVisibility goes as "", which VCO's own CRD enum refuses.
+  # The CR then has no finalizer, and deleting it never deletes the mount in
+  # Vault. "hidden" is Vault's default.
+  config:
+    listingVisibility: hidden
+  name: workloads
+  path: team-a/kubernetes
+  type: kubernetes
+---
+# Source: mto-extension-vault-community/templates/01-tenant-scaffolding.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: team-a-kubernetes-config
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  kubernetesHost: https://kubernetes.default.svc:443
+  name: workloads
+  path: team-a/kubernetes
+  tokenReviewerServiceAccount:
+    name: vault-token-reviewer
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-dev.app-a
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-dev.app-a
+  path: team-a/kubernetes/workloads
+  policies:
+    - kv.team-a.team-a-dev.app-a
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: team-a-dev
+        stakater.com/tenant: team-a
+  targetServiceAccounts:
+    - app-a
+  tokenMaxTTL: 14400
+  tokenPeriod: 1800
+  tokenTTL: 3600
+  tokenType: service
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-dev.app-c
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-dev.app-c
+  path: team-a/kubernetes/workloads
+  policies:
+    - kv.team-a.team-a-dev.app-c
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: team-a-dev
+        stakater.com/tenant: team-a
+  targetServiceAccounts:
+    - app-c
+  tokenMaxTTL: 14400
+  tokenPeriod: 1800
+  tokenTTL: 3600
+  tokenType: service
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-tools.app-b
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-tools.app-b
+  path: team-a/kubernetes/workloads
+  policies:
+    - kv.team-a.team-a-tools.app-b
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: team-a-tools
+        stakater.com/tenant: team-a
+  targetServiceAccounts:
+    - app-b
+  tokenMaxTTL: 14400
+  tokenPeriod: 1800
+  tokenTTL: 3600
+  tokenType: service
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-tools.app-d
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-tools.app-d
+  path: team-a/kubernetes/workloads
+  policies:
+    - kv.team-a.team-a-tools.app-d
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: team-a-tools
+        stakater.com/tenant: team-a
+  targetServiceAccounts:
+    - app-d
+  tokenMaxTTL: 14400
+  tokenPeriod: 1800
+  tokenTTL: 3600
+  tokenType: service
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-dev.app-a
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-dev.app-a
+  policy: |
+    # 1. The app's own secrets, at team-a/kv/data/dev/team-a-dev/payments/.
+    path "team-a/kv/data/dev/team-a-dev/payments/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/team-a-dev/payments/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-dev.app-c
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-dev.app-c
+  policy: |
+    # 1. The app's own secrets, at team-a/kv/data/dev/team-a-dev/app-c/.
+    path "team-a/kv/data/dev/team-a-dev/app-c/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/team-a-dev/app-c/*" { capabilities = ["read", "list"] }
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-tools.app-b
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-tools.app-b
+  policy: |
+    # 1. The app's own secrets, at team-a/kv/data/dev/team-a-tools/app-b/.
+    path "team-a/kv/data/dev/team-a-tools/app-b/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/metadata/dev/team-a-tools/app-b/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/delete/dev/team-a-tools/app-b/*"   { capabilities = ["update"] }
+    path "team-a/kv/undelete/dev/team-a-tools/app-b/*" { capabilities = ["update"] }
+    path "team-a/kv/destroy/dev/team-a-tools/app-b/*"  { capabilities = ["update"] }
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: kv.team-a.team-a-tools.app-d
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-role
+    serviceAccount:
+      name: vco-sa
+  name: kv.team-a.team-a-tools.app-d
+  policy: |
+    # 1. The app's own secrets, at team-a/kv/data/dev/team-a-tools/app-d/.
+    path "team-a/kv/data/dev/team-a-tools/app-d/*"     { capabilities = ["list"] }
+    path "team-a/kv/metadata/dev/team-a-tools/app-d/*" { capabilities = ["list"] }
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  _format: v1
+  _usage: One entry per app that uses Vault in this namespace. Paths are API data paths; in the Vault UI open the team-a/kv mount and browse <env>/<namespace>/<app>/. The vault-config-<serviceaccount> ConfigMap holds the full environment for one app.
+  app-c: |
+    serviceAccount: "app-c"
+    role: "viewer"
+    kvPath: team-a/kv/data/dev/team-a-dev/app-c/
+  payments: |
+    serviceAccount: "app-a"
+    role: "editor"
+    kvPath: team-a/kv/data/dev/team-a-dev/payments/
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: vault-apps
+  namespace: team-a-dev
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBFIXTUREONLYNOTAREALCERTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    -----END CERTIFICATE-----
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: vault-ca-bundle
+  namespace: team-a-dev
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
+  VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_K8S_MOUNT: team-a/kubernetes/workloads
+  VAULT_K8S_ROLE: kv.team-a.team-a-dev.app-a
+  VAULT_KV_APP: payments
+  VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-dev/payments/
+  VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-dev/payments/
+  VAULT_NAMESPACE: ""
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: payments
+  name: vault-config-app-a
+  namespace: team-a-dev
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
+  VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_K8S_MOUNT: team-a/kubernetes/workloads
+  VAULT_K8S_ROLE: kv.team-a.team-a-dev.app-c
+  VAULT_KV_APP: app-c
+  VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-dev/app-c/
+  VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-dev/app-c/
+  VAULT_NAMESPACE: ""
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-c
+  name: vault-config-app-c
+  namespace: team-a-dev
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  _format: v1
+  _usage: One entry per app that uses Vault in this namespace. Paths are API data paths; in the Vault UI open the team-a/kv mount and browse <env>/<namespace>/<app>/. The vault-config-<serviceaccount> ConfigMap holds the full environment for one app.
+  app-b: |
+    serviceAccount: "app-b"
+    role: "admin"
+    kvPath: team-a/kv/data/dev/team-a-tools/app-b/
+  app-d: |
+    serviceAccount: "app-d"
+    role: "audit-read"
+    kvPath: team-a/kv/data/dev/team-a-tools/app-d/
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: vault-apps
+  namespace: team-a-tools
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    MIIBFIXTUREONLYNOTAREALCERTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+    -----END CERTIFICATE-----
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: vault-ca-bundle
+  namespace: team-a-tools
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
+  VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_K8S_MOUNT: team-a/kubernetes/workloads
+  VAULT_K8S_ROLE: kv.team-a.team-a-tools.app-b
+  VAULT_KV_APP: app-b
+  VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-tools/app-b/
+  VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-tools/app-b/
+  VAULT_NAMESPACE: ""
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-b
+  name: vault-config-app-b
+  namespace: team-a-tools
+---
+# Source: mto-extension-vault-community/templates/04-sa-own-tenant.yaml
+apiVersion: v1
+data:
+  VAULT_ADDR: http://vault.vault.svc.cluster.local:8200
+  VAULT_CACERT: /etc/vault/ca/ca.crt
+  VAULT_K8S_MOUNT: team-a/kubernetes/workloads
+  VAULT_K8S_ROLE: kv.team-a.team-a-tools.app-d
+  VAULT_KV_APP: app-d
+  VAULT_KV_APP_META_PATH: team-a/kv/metadata/dev/team-a-tools/app-d/
+  VAULT_KV_APP_PATH: team-a/kv/data/dev/team-a-tools/app-d/
+  VAULT_NAMESPACE: ""
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+    vault.stakater.com/app: app-d
+  name: vault-config-app-d
+  namespace: team-a-tools

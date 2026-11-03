@@ -1,0 +1,82 @@
+# Render-test fixture: every feature toggle on, every per-SA / per-Deployment
+# annotation path exercised, all of it valid — misconfiguration cases live in
+# values-guards.yaml. Tenant team-a owns namespaces team-a-dev and
+# team-a-tools; team-b is a known peer.
+#
+# Every opt-in field is turned on somewhere here: a field behind an opt-in that
+# no fixture enables is a field crd-validate never sends through the apiserver.
+tenant: team-a
+knownTenants: "team-a,team-b"
+
+eso: enabled
+
+vaultCABundle: |
+  -----BEGIN CERTIFICATE-----
+  MIIBFIXTUREONLYNOTAREALCERTAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+  -----END CERTIFICATE-----
+
+# role and serviceAccount differ, so a swap of the two fields is visible.
+vco:
+  role: vco-role
+  serviceAccount: vco-sa
+
+kubernetesAuth:
+  # Renders spec.tokenReviewerServiceAccount.
+  tokenReviewerServiceAccount: vault-token-reviewer
+
+# Renders tokenPeriod.
+token:
+  ttl: 3600
+  maxTTL: 14400
+  period: 1800
+
+serviceAccounts:
+  # Own-tenant grants with a named app.
+  - metadata:
+      name: app-a
+      namespace: team-a-dev
+      annotations:
+        vault.stakater.com/kv: "true"
+        vault.stakater.com/role: editor
+        vault.stakater.com/app: payments
+  # Second role + second namespace.
+  - metadata:
+      name: app-b
+      namespace: team-a-tools
+      annotations:
+        vault.stakater.com/kv: "true"
+        vault.stakater.com/role: admin
+  # Read-only role. No app annotation, so its app is its own name.
+  - metadata:
+      name: app-c
+      namespace: team-a-dev
+      annotations:
+        vault.stakater.com/kv: "true"
+        vault.stakater.com/role: viewer
+  # audit-read role: the metadata-list-only branch.
+  - metadata:
+      name: app-d
+      namespace: team-a-tools
+      annotations:
+        vault.stakater.com/kv: "true"
+        vault.stakater.com/role: audit-read
+  # No vault annotation at all → nothing rendered, no error.
+  - metadata:
+      name: plain-sa
+      namespace: team-a-dev
+
+deployments:
+  - metadata:
+      name: web
+      namespace: team-a-dev
+    spec:
+      template:
+        spec:
+          serviceAccountName: app-a
+  - metadata:
+      name: worker
+      namespace: team-a-tools
+    spec:
+      template:
+        spec:
+          serviceAccountName: app-b

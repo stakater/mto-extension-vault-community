@@ -99,7 +99,8 @@ and can't write; a ServiceAccount without the annotation is refused.
 **AC-SHR-3 — Across tenants.** *(L)* `web` with `kv-export-tenant: team-b`
 writes `shared/kv/data/dev/from-team-a/to-team-b/`; `api` with
 `kv-import-tenant: team-a` reads it and can't write; each is refused the
-other's share role; the prefix tenant `team`'s export can't reach
+other's share role; each share role logs in at its own tenant's mount,
+`VAULT_K8S_MOUNT` (ADR-0007); the prefix tenant `team`'s export can't reach
 `from-team-a/` (observed in C.0, 11 checks).
 
 ## Delivery

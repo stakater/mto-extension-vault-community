@@ -51,8 +51,8 @@ vco:
 
 # The kubernetes auth mount workloads log in with. VCO mounts auth engines at
 # <spec.path>/<spec.name>, and the chart puts the tenant in front: the mount is
-# auth/<tenant>/kubernetes/workloads, and auth/<shared>/kubernetes/workloads
-# for share roles. ESO and the per-SA ConfigMap (VAULT_K8S_MOUNT) use it.
+# auth/<tenant>/kubernetes/workloads. The tenant's share roles live on it too
+# (ADR-0007). ESO and the per-SA ConfigMap (VAULT_K8S_MOUNT) use it.
 kubernetesAuth:
   path: kubernetes
   name: workloads
@@ -75,8 +75,8 @@ externalSecretRefreshInterval: "1h"
 # Cluster-wide namespace label MTO applies to tenant namespaces.
 tenantLabelKey: stakater.com/tenant
 
-# The shared prefix: cross-tenant shares land in <name>/kv and their roles live
-# on auth/<name>/kubernetes/workloads. The parent renders both once per cluster.
+# The shared prefix: cross-tenant shares land in <name>/kv, which the parent
+# renders once per cluster. The share roles live on the tenant's own mount.
 sharedTenant:
   name: shared
 

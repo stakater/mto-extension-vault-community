@@ -3,9 +3,6 @@
 {{- $tenantLabel := .parameters.tenantLabelKey }}
 {{- $shared := .parameters.sharedTenantName }}
 {{- $eso := .parameters.eso }}
-{{- $k8sPath := .parameters.k8sAuthPath }}
-{{- $k8sName := .parameters.k8sAuthName }}
-{{- $reviewer := .parameters.tokenReviewerServiceAccount }}
 {{- $reserved := splitList "," .parameters.reservedNames }}
 {{- /* The spec.authentication block every CR here carries. The tenant chart
        renders the same block from the same values. Vault Community has no
@@ -47,7 +44,7 @@
 {{- else if gt (len $n) 63 }}
 {{- $_ := set $skipped $n (printf "the name is %d characters: it is a label value, and label values cap at 63: nothing is rendered for this tenant" (len $n)) }}
 {{- else if eq $n $shared }}
-{{- $_ := set $skipped $n (printf "the name is the shared prefix %q (shared/kv, auth/%s/...): nothing is rendered for this tenant" $shared $shared) }}
+{{- $_ := set $skipped $n (printf "the name is the shared prefix %q of the shared mount %s/kv: nothing is rendered for this tenant" $shared $shared) }}
 {{- else if has $n $reserved }}
 {{- $_ := set $skipped $n (printf "the name is reserved: %s/ or auth/%s/ is a path Vault or the platform already uses, and Vault refuses a mount nested under another: nothing is rendered for this tenant" $n $n) }}
 {{- else }}
@@ -91,36 +88,6 @@ spec:
     listingVisibility: hidden
   options:
     version: "2"
-{{- /* The share roles' auth mount auth/<shared>/<path>/<name>. One for every
-       tenant: a share role is bound to its own ServiceAccount, namespace name
-       and tenant label, so the mount is not the wall. */}}
----
-apiVersion: redhatcop.redhat.io/v1alpha1
-kind: AuthEngineMount
-metadata: { name: {{ printf "%s-kubernetes" $shared | quote }}, namespace: {{ $cfgNs }} }
-spec:
-  authentication:
-    {{ $auth }}
-  path: {{ printf "%s/%s" $shared $k8sPath | quote }}
-  name: {{ $k8sName }}
-  type: kubernetes
-  # listingVisibility: see the shared kv mount above.
-  config:
-    listingVisibility: hidden
----
-apiVersion: redhatcop.redhat.io/v1alpha1
-kind: KubernetesAuthEngineConfig
-metadata: { name: {{ printf "%s-kubernetes-config" $shared | quote }}, namespace: {{ $cfgNs }} }
-spec:
-  authentication:
-    {{ $auth }}
-  path: {{ printf "%s/%s" $shared $k8sPath | quote }}
-  name: {{ $k8sName }}
-  kubernetesHost: {{ .parameters.kubernetesHost }}
-{{- if $reviewer }}
-  tokenReviewerServiceAccount:
-    name: {{ $reviewer }}
-{{- end }}
 {{- range $name := $tenants }}
 {{- /* Every tenant's kv mount <tenant>/kv, rendered HERE rather than in the
        tenant chart, so it lives as long as the Tenant CR. The child TIs below

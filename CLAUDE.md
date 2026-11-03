@@ -42,7 +42,7 @@ ADR-immutability and story-citation checks.
 1. **No `Namespace` CR and no `targetNamespace`** anywhere.
 1. **Tenants never administer Vault** (ADR-0004): no role writes policies,
    mounts, auth or identity.
-1. **VCO is bounded by name and type, its input at admission** (ADR-0006):
+1. **VCO is bounded by name and type, its input at admission** (ADR-0008):
    it can't write a policy outside the three families, can't touch
    `auth/kubernetes`, can't delete a kv mount, can't mount another type. Its
    policy does not bound what a policy grants, so VCO's token is

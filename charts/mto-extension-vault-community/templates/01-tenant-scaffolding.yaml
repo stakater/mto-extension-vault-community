@@ -1,0 +1,53 @@
+{{- if include "vault.componentEnabled" (dict "component" "core" "ctx" .) }}
+{{/*
+Section 1 — per-Tenant scaffolding, one copy per child TI:
+  AuthEngineMount             <tenant>-kubernetes         auth/<tenant>/kubernetes/workloads
+  KubernetesAuthEngineConfig  <tenant>-kubernetes-config  its config
+
+Vault Community has no namespaces, so the mount is the Enterprise path with the
+tenant in front (ADR-0007). It holds the tenant's workload roles and its share
+roles. Disabling it revokes every token issued through it (A6): when the
+tenant's last labelled namespace goes, this TI goes, and so does every token.
+
+The tenant's kv mount is NOT here: the parent renders it for every Tenant CR,
+so it lives as long as the Tenant and not as long as its labelled namespaces.
+*/}}
+{{- $name := required ".Values.tenant must be set by the parent" .Values.tenant }}
+{{- $labels := include "vault.labels" . }}
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata:
+  name: {{ $name }}-kubernetes
+  namespace: {{ .Values.configNamespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  {{- include "vault.vcoAuth" $ | nindent 2 }}
+  path: {{ printf "%s/%s" $name (trimAll "/" .Values.kubernetesAuth.path) | quote }}
+  name: {{ .Values.kubernetesAuth.name }}
+  type: kubernetes
+  # VCO adds its finalizer with an update that sends every config field, and
+  # an unset listingVisibility goes as "", which VCO's own CRD enum refuses.
+  # The CR then has no finalizer, and deleting it never deletes the mount in
+  # Vault. "hidden" is Vault's default.
+  config:
+    listingVisibility: hidden
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata:
+  name: {{ $name }}-kubernetes-config
+  namespace: {{ .Values.configNamespace }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  {{- include "vault.vcoAuth" $ | nindent 2 }}
+  path: {{ printf "%s/%s" $name (trimAll "/" .Values.kubernetesAuth.path) | quote }}
+  name: {{ .Values.kubernetesAuth.name }}
+  kubernetesHost: {{ .Values.kubernetesAuth.kubernetesHost }}
+  {{- with .Values.kubernetesAuth.tokenReviewerServiceAccount }}
+  tokenReviewerServiceAccount:
+    name: {{ . }}
+  {{- end }}
+{{- end }}

@@ -57,13 +57,13 @@ As a platform team, I want to install the extension once and have every tenant
 get its own KV mount, so that no tenant needs a setup step.
 
 Done: bootstrap chart ported; parent renders `<tenant>/kv` per valid Tenant,
-`shared/kv` and `auth/shared/kubernetes/workloads` once; reserved and invalid
+`shared/kv` once (and, until ADR-0007, `auth/shared/kubernetes/workloads`); reserved and invalid
 names (secrets and auth tables) skipped and listed; no `Namespace` CR and no `targetNamespace` anywhere (render test);
 `make` runs lint, version checks, render tests, CRD validation against vendored
 VCO v1.0.3 CRDs. Satisfies **AC-LIFE-1**, **AC-ISO-8**. Planning:
 [`planning/C1-bootstrap-fans-out.md`](planning/C1-bootstrap-fans-out.md).
 
-**Story C.2 — Workload access with the scope check** 👍 *Approved*
+**Story C.2 — Workload access with the scope check** ✅ *Done*
 
 As an application team, I want a ServiceAccount annotation to give my app its
 own secrets and nothing else, so that two apps — and two tenants — can never
@@ -77,7 +77,8 @@ render check, mutation-tested; `vault-config-<sa>` with
 `VAULT_NAMESPACE` empty and mount-prefixed paths; live: own prefix read and
 write, sibling and other tenant refused (403 paired with an allow); a reused
 namespace name refused. Satisfies **AC-ISO-1..5**, **AC-ISO-10**,
-**AC-ACC-1..4**.
+**AC-ACC-1..4**. Planning:
+[`planning/C2-workload-access-scope-check.md`](planning/C2-workload-access-scope-check.md).
 
 **Story C.3 — VCO can't widen itself** 👍 *Approved*
 
@@ -154,8 +155,9 @@ As an application team, I want to export secrets to a named peer tenant, and a
 peer to import them, so that two tenants exchange data without reaching each
 other's mounts.
 
-Done: share-out and share-in policies and roles on
-`auth/shared/kubernetes/workloads`, paths `shared/kv/<env>/from-<a>/to-<b>/`;
+Done: share-out and share-in policies and roles on the tenant's own
+`auth/<tenant>/kubernetes/workloads` (ADR-0007), paths
+`shared/kv/<env>/from-<a>/to-<b>/`;
 the share direction in the scope check and the admission policies; the
 `kv-import.<name>` Deployment annotation with its share SecretStore; live: the
 exporter writes, the importer reads through ESO, the reverse direction and a

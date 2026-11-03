@@ -1,0 +1,50 @@
+# Render-test fixture for the misconfiguration guards. Every ServiceAccount here
+# is wrong in exactly one way, plus correct ones in a DIFFERENT namespace: the
+# point of reporting per ServiceAccount instead of failing the render is that
+# one tenant namespace's mistake must not stop another's objects from being
+# emitted. One TemplateInstance renders the whole tenant, so a fail() here would
+# freeze every namespace it owns.
+tenant: team-a
+knownTenants: "team-a,team-b"
+eso: enabled
+serviceAccounts:
+  # role with no engine
+  - metadata: { name: g-role-only, namespace: team-a-dev, annotations: { vault.stakater.com/role: editor } }
+  # engine with no role
+  - metadata: { name: g-no-role, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true" } }
+  # unknown role
+  - metadata: { name: g-bad-role, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editorr } }
+  # an OpenBao-extension engine this extension does not support
+  - metadata: { name: g-transit, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/transit: "true" } }
+  # app name that would break out of the policy path
+  - metadata:
+      name: g-injection
+      namespace: team-a-dev
+      annotations:
+        vault.stakater.com/kv: "true"
+        vault.stakater.com/role: editor
+        vault.stakater.com/app: 'x/*" { capabilities = ["sudo"] } path "team-b/kv/data/dev/team-b-prod'
+  # app name that is Vault's single-segment wildcard
+  - metadata: { name: g-wildcard, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: "+" } }
+  # app name colliding with a chart-owned prefix
+  - metadata: { name: g-reserved, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: _shared } }
+  # two ServiceAccounts resolving to one app: the claimant, and the one that
+  # declared nothing and is defended by its own name
+  - metadata: { name: g-claimed, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor } }
+  - metadata: { name: g-claimer, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: admin, vault.stakater.com/app: g-claimed } }
+  # the default ServiceAccount
+  - metadata: { name: default, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor } }
+  # unknown key
+  - metadata: { name: g-unknown-key, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/subscribe-to-ns: team-a-dev } }
+  # misspelled boolean
+  - metadata: { name: g-bad-bool, namespace: team-a-dev, annotations: { vault.stakater.com/kv: "ture", vault.stakater.com/role: editor } }
+  # app named but kv off — registers nothing
+  - metadata: { name: g-app-only, namespace: team-a-dev, annotations: { vault.stakater.com/app: payments } }
+  # correct, and in another namespace
+  - metadata: { name: good-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor } }
+  # dotted ServiceAccount name — legal in Kubernetes, rejected because every
+  # chart-reserved name suffix is dot-separated
+  - metadata: { name: g.dotted, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: payments } }
+  # a correct ServiceAccount whose app is the word "no" (a YAML boolean when unquoted)
+  - metadata: { name: hostile-sa, namespace: team-a-prod, annotations: { vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/app: "no" } }
+deployments: []

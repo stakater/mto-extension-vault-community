@@ -1,7 +1,7 @@
 # Parent Template (gotemplate). Watches MTO Tenant CRs cluster-wide through the
 # parent TI's objectFieldRef and renders:
-#   - the shared mounts, once per Vault: shared/kv for cross-tenant shares and
-#     auth/shared/kubernetes/workloads for the share roles, with its config
+#   - the shared mount shared/kv for cross-tenant shares, once per Vault (the
+#     share roles live on each tenant's own auth mount, ADR-0007)
 #   - every Tenant's kv mount <tenant>/kv, for as long as the Tenant exists
 #   - one TemplateInstance per enabled child Template, per Tenant with a
 #     labelled namespace
@@ -13,12 +13,11 @@
 #
 # The gotemplate body lives in files/parent-gotemplate.tpl (sourced via
 # .Files.Get to keep the t-op-v2 action delimiters out of helm's engine).
-{{- /* What the parent renders itself: every tenant's kv mount, the shared kv
-       mount, and the shared auth mount and its config. */ -}}
+{{- /* What the parent renders itself: every tenant's kv mount and the shared
+       kv mount. Share roles live on each tenant's own auth mount (ADR-0007),
+       so there is no shared auth mount. */ -}}
 {{- $parentKinds := list
-      (dict "kind" "SecretEngineMount"          "output" "engines")
-      (dict "kind" "AuthEngineMount"            "output" "sharedAuthMounts")
-      (dict "kind" "KubernetesAuthEngineConfig" "output" "sharedAuthConfigs") }}
+      (dict "kind" "SecretEngineMount" "output" "engines") }}
 ---
 apiVersion: templates.v2.stakater.com/v2alpha1
 kind: Template
@@ -54,23 +53,14 @@ spec:
       value: {{ include "mto-extension-vault-community-bootstrap.reservedNames" . | quote }}
     - name: eso
       value: {{ include "mto-extension-vault-community-bootstrap.esoMode" . | quote }}
-    # How the parent's VCO CRs log in, and the share roles' auth mount
-    # <shared>/<k8sAuthPath>/<k8sAuthName>. Same values the child Templates
-    # stamp into every tenant, so a share role and its mount agree.
+    # How the parent's VCO CRs log in. The child Templates stamp the same
+    # values into every tenant.
     - name: vcoAuthPath
       value: {{ .Values.vco.authPath | quote }}
     - name: vcoRole
       value: {{ .Values.vco.role | quote }}
     - name: vcoServiceAccount
       value: {{ .Values.vco.serviceAccount | quote }}
-    - name: k8sAuthPath
-      value: {{ .Values.kubernetesAuth.path | quote }}
-    - name: k8sAuthName
-      value: {{ .Values.kubernetesAuth.name | quote }}
-    - name: kubernetesHost
-      value: {{ .Values.kubernetesAuth.kubernetesHost | quote }}
-    - name: tokenReviewerServiceAccount
-      value: {{ .Values.kubernetesAuth.tokenReviewerServiceAccount | default "" | quote }}
   # State of what this Template renders itself, plus every child TI it emits.
   # engines holds one entry per tenant plus the shared one, so past ~49
   # tenants the 50-entry cap drops entries (OutputsResolved says so).

@@ -27,7 +27,7 @@ Enterprise extension's shape (ADR-0001). See `diagrams.md`.
 
 | Chart | Installed | Renders |
 |---|---|---|
-| `mto-extension-vault-community-bootstrap` | once per cluster, by Helm | the parent Template and TemplateInstance; the shared mounts `shared/kv` and `auth/shared/kubernetes/workloads` with its config; **per Tenant**, the tenant mount `<tenant>/kv`; the skipped-tenants ConfigMap; the VCO login ServiceAccount; the admission policies on VCO CRs (§4) |
+| `mto-extension-vault-community-bootstrap` | once per cluster, by Helm | the parent Template and TemplateInstance; the shared mount `shared/kv`; **per Tenant**, the tenant mount `<tenant>/kv`; the skipped-tenants ConfigMap; the VCO login ServiceAccount; the admission policies on VCO CRs (§4) |
 | `mto-extension-vault-community` | never by hand; pulled per tenant | slice `core`: the tenant's auth mounts `auth/<tenant>/kubernetes/workloads` and (with SSO) `auth/<tenant>/oidc/sso` with their config, policies and Kubernetes auth roles per annotated ServiceAccount, SSO policies and OIDC roles per role, `vault-config-<sa>` and `vault-apps` ConfigMaps; slice `eso`: SecretStores and ExternalSecrets |
 
 The three differences from the Enterprise charts:
@@ -38,8 +38,10 @@ The three differences from the Enterprise charts:
    Enterprise's `kv/`, `auth/kubernetes/workloads/` and `auth/oidc/sso/`
    inside the namespace `<tenant>/` become `<tenant>/kv/`,
    `auth/<tenant>/kubernetes/workloads/` and `auth/<tenant>/oidc/sso/` in
-   root; the shared namespace's become `shared/kv/` and
-   `auth/shared/kubernetes/workloads/` (ADR-0002). For secrets the request path
+   root; the shared namespace's `kv/` becomes `shared/kv/`, and the share
+   roles live on each tenant's own `auth/<tenant>/kubernetes/workloads/`, so a
+   share login uses `VAULT_K8S_MOUNT` like any other (ADR-0007). For secrets
+   the request path
    is the same string Enterprise uses with the namespace in the URL
    (`/v1/team-a/kv/data/...`). The tenant chart renders the tenant's auth
    mounts, as Enterprise's does, so offboarding disables them and revokes
@@ -52,7 +54,7 @@ The three differences from the Enterprise charts:
    Q16). So the bootstrap chart installs admission policies that refuse a VCO
    CR in `vault-config` whose content leaves its tenant's scope, or that
    Template Operator writes for a TemplateInstance outside `vault-config`
-   (§4, ADR-0003, ADR-0006).
+   (§4, ADR-0003, ADR-0008).
 
 Each role also binds its namespace by name **and** tenant label (Q13). That is
 not a difference by intent: the Enterprise chart binds by name only and has
@@ -67,12 +69,11 @@ environment `dev`.
 |---|---|---|---|
 | `SecretEngineMount` | parent, per Tenant | `team-a-kv` | `team-a/kv/`, `kv-v2`, `listingVisibility: hidden` (V4) |
 | `SecretEngineMount` | parent, once | `shared-kv` | `shared/kv/` |
-| `AuthEngineMount` + `KubernetesAuthEngineConfig` | parent, once | `shared-kubernetes` | `auth/shared/kubernetes/workloads/`, for share roles |
 | `AuthEngineMount` + `KubernetesAuthEngineConfig` | tenant chart, per tenant | `team-a-kubernetes` | `auth/team-a/kubernetes/workloads/` |
 | `AuthEngineMount` + `JWTOIDCAuthEngineConfig` | tenant chart, per tenant, with SSO | `team-a-oidc` | `auth/team-a/oidc/sso/` |
 | `Policy` | tenant chart, per ServiceAccount | `kv.team-a.team-a-api.web` | see below |
 | `KubernetesAuthEngineRole` | tenant chart, per ServiceAccount | `kv.team-a.team-a-api.web` | on `team-a/kubernetes/workloads`, bound to `web` in the namespace selected by `kubernetes.io/metadata.name: team-a-api` and `stakater.com/tenant: team-a` (V10), policy of the same name, TTL ≤ 1 h |
-| `Policy` + `KubernetesAuthEngineRole` | per export / import | `share.team-a.team-a-api.web.out.team-b` / `.in.team-b` | on `shared/kubernetes/workloads`; `shared/kv/data/dev/from-team-a/to-team-b/*` write / `from-team-b/to-team-a/*` read |
+| `Policy` + `KubernetesAuthEngineRole` | per export / import | `share.team-a.team-a-api.web.out.team-b` / `.in.team-b` | on `team-a/kubernetes/workloads` (the tenant's own mount, ADR-0007); `shared/kv/data/dev/from-team-a/to-team-b/*` write / `from-team-b/to-team-a/*` read |
 | `Policy` + `JWTOIDCAuthEngineRole` | per SSO role | `sso.team-a.editor` | on `team-a/oidc/sso`, `bound_claims.groups: [team-a-editors]`, policy over `team-a/kv/` at that role |
 | ConfigMap | per ServiceAccount | `vault-config-web` | `VAULT_ADDR`, `VAULT_K8S_MOUNT=team-a/kubernetes/workloads`, `VAULT_K8S_ROLE`, `VAULT_KV_APP_PATH=team-a/kv/data/dev/team-a-api/web/`, `VAULT_KV_SHARED_OUT_PATH`, `VAULT_FROM_<NS>_PATH`, `VAULT_OUT_<PEER>_*`, `VAULT_IN_<PEER>_*`; **`VAULT_NAMESPACE` empty** |
 | `SecretStore` (slice `eso`) | per ServiceAccount | `web-vault` | `path: team-a/kv`, `version: v2`, no `namespace`, Kubernetes auth on `team-a/kubernetes/workloads` with role `kv.team-a.team-a-api.web` |
@@ -111,7 +112,7 @@ before it can exist:
 | every path of `kv.t.…` and `sso.t.…` is under `t/kv/{data,metadata,delete,undelete,destroy}/<env>/`; an SSO role may also list `t/kv/metadata` | nothing outside the tenant, and not the mount's `config` (ADR-0004) |
 | every path of `share.t.<ns>.<sa>.out.p` is `shared/kv/{data,metadata}/<env>/from-t/to-p/*`; of `….in.p`, `…/from-p/to-t/*`, with read and list only | a share in its own direction, to its named peer |
 | the tenant segment is always followed by `/` before any wildcard; `*` appears only as the final character after a `/`; no `+` | `team-a*` would match `team-ab/` (P2) |
-| a workload role binds only its own policy, its tenant's mount (`t/kubernetes/workloads`; `shared/kubernetes/workloads` for `share.`), its own ServiceAccount, and its namespace by `kubernetes.io/metadata.name` AND `stakater.com/tenant: t` | a role can't hand out another tenant's policy, and a namespace name reused by another tenant gets nothing (Q13) |
+| a workload role binds only its own policy, its tenant's mount `t/kubernetes/workloads` (for `share.` roles too), its own ServiceAccount, and its namespace by `kubernetes.io/metadata.name` AND `stakater.com/tenant: t` | a role can't hand out another tenant's policy, and a namespace name reused by another tenant gets nothing (Q13) |
 | an SSO role binds only its own policy, `t/oidc/sso`, and exactly the tenant's group from the configured pattern, with string claims | no group of one tenant gets another's role; no role without bound claims (Enterprise's `fallback` is refused) |
 | a mount is `t/kv` of type `kv`, `t/kubernetes/workloads` or `t/oidc/sso`, with no audit or header settings; an auth config names this cluster's API and CA and the install's IdP | VCO is asked for nothing else |
 
@@ -161,7 +162,7 @@ reaches the TemplateInstance outputs — `secretEngineMountLastError` on the
 parent, `authEngineMountLastError` on the child (T1) — and no other tenant is
 affected.
 
-## 6. VCO's login policy (ADR-0006)
+## 6. VCO's login policy (ADR-0008)
 
 VCO is the only identity that writes Vault configuration, and on Community
 Edition it writes in the same namespace as everything else — including its own
@@ -184,7 +185,7 @@ path "sys/auth/+/oidc/sso"  { capabilities = ["create", "read", "update", "delet
 path "sys/auth/+/oidc/sso/tune"                      { capabilities = ["create", "read", "update", "sudo"] }
 path "auth/+/kubernetes/workloads/config"            { capabilities = ["create", "read", "update"] }
 path "auth/+/kubernetes/workloads/role/kv.*"         { capabilities = ["create", "read", "update", "delete"] }
-path "auth/shared/kubernetes/workloads/role/share.*" { capabilities = ["create", "read", "update", "delete"] }
+path "auth/+/kubernetes/workloads/role/share.*"      { capabilities = ["create", "read", "update", "delete"] }
 path "auth/+/oidc/sso/config"                        { capabilities = ["create", "read", "update"] }
 path "auth/+/oidc/sso/role/sso.*"                    { capabilities = ["create", "read", "update", "delete"] }
 path "sys/policy/kv.*"    { capabilities = ["create", "read", "update", "delete"] }
