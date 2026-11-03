@@ -190,14 +190,15 @@ Done: the Reloader annotation documented; live: a new version written in Vault
 reaches a new pod through ESO and Reloader. Satisfies **AC-DEL-2**. Planning:
 [`planning/C10-rotation-reaches-the-pod.md`](planning/C10-rotation-reaches-the-pod.md).
 
-**Story C.11 — Health and preflight** 👍 *Approved*
+**Story C.11 — Health and preflight** ✅ *Done*
 
 As a platform team, I want each tenant's Vault state and errors visible on the
 Kubernetes side, so that a failure is found without reading Vault.
 
 Done: the Template outputs and the optional PrometheusRule ported; a mount
 collision surfaces on its own tenant only; the e2e preflight refuses Vault
-Enterprise. Satisfies **AC-OPS-1**, **AC-OPS-2**.
+Enterprise. Satisfies **AC-OPS-1**, **AC-OPS-2**. Planning:
+[`planning/C11-health-and-preflight.md`](planning/C11-health-and-preflight.md).
 
 ---
 

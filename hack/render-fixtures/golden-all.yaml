@@ -244,6 +244,34 @@ spec:
       server: http://vault.vault.svc.cluster.local:8200
       version: v2
 ---
+# Source: mto-extension-vault-community/templates/09-monitoring.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app.kubernetes.io/instance: mto-extension-vault-community
+    app.kubernetes.io/managed-by: helm-via-template-operator-v2
+    app.kubernetes.io/name: mto-extension-vault-community
+    app.kubernetes.io/version: 0.1.0
+    helm.sh/chart: mto-extension-vault-community-0.1.0
+    stakater.com/tenant: team-a
+  name: mto-extension-vault-community-team-a
+  namespace: monitoring
+spec:
+  groups:
+    - name: mto-extension-vault-community-team-a.eso
+      rules:
+        - alert: VaultExternalSecretSyncFailed
+          annotations:
+            description: Vault login failure or missing source path. Check the ExternalSecret events and the Vault audit log.
+            summary: ExternalSecret {{ $labels.namespace }}/{{ $labels.name }} not syncing
+          expr: |
+            externalsecret_status_condition{condition="Ready", status="False", namespace=~"team-a-dev|team-a-tools"} > 0
+          for: 5m
+          labels:
+            severity: warning
+            tenant: team-a
+---
 # Source: mto-extension-vault-community/templates/01-tenant-scaffolding.yaml
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: AuthEngineMount

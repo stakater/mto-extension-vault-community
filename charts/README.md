@@ -330,6 +330,41 @@ values". There is no fallback role: `sso.tenantRoleMapping.fallback` must stay
 the IdP that tenant's access. A person removed from a group can't log in
 again; a token already issued lives to its TTL (`ssoToken.ttl`, default 15m).
 
+## Monitoring
+
+`tenantValues.monitoring.enabled=true` renders one PrometheusRule per tenant,
+`mto-extension-vault-community-<tenant>` in `monitoring.prometheusNamespace`,
+with one alert: `VaultExternalSecretSyncFailed`, an ExternalSecret in one of
+the tenant's namespaces not Ready for 5 minutes. It needs the
+prometheus-operator CRDs and ESO's metrics scraped.
+
+## Health
+
+VCO's status can't say whether an object is healthy now: its
+`ReconcileSuccessful` and `ReconcileFailed` conditions freeze after their
+first write. So the TemplateInstance outputs say two things per object:
+
+| Output field | Means |
+|---|---|
+| `<kind>Succeeded` | `["True"]` once the object was written to Vault at least once; `[]` means never — the one clear failure |
+| `<kind>LastError` | the message of the most recent failed reconcile, ever; it stays after the object recovers |
+
+The parent TI reports each tenant's kv mount (`engines…`); each tenant's child
+TI reports its auth mounts, configs, roles and policies (`authMounts…`,
+`k8sAuthRoles…`, `policies…`, `oidcRoles…`). A TI's own `Ready` does not
+reflect VCO: read the outputs.
+
+```bash
+kubectl -n vault-config get templateinstances.templates.v2.stakater.com mto-extension-vault-community-parent \
+  -o jsonpath='{.status.outputs.enginesLastError}'
+```
+
+A tenant named like a platform mount the reserved list misses shows here: its
+kv mount fails on the parent's `enginesLastError` ("path is already in use"),
+its auth mount on its child's `authMountsLastError`, and no other tenant is
+affected. Add the name to `parent.reservedPaths`, and rename or delete the
+tenant.
+
 ## Deletion
 
 Access ends at once; data stays until a Vault admin purges it.

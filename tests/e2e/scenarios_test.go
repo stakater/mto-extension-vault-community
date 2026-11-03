@@ -14,6 +14,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -91,6 +92,7 @@ func TestE2E(t *testing.T) {
 		deleteTenant(t, alpha, alphaNS, toolsNS, reuseNS)
 		deleteTenant(t, beta, betaNS, reuseNS)
 		deleteTenant(t, prefixT, coreNS)
+		deleteTenant(t, "e2e-plat", "e2e-plat-dev")
 		// Vault state a failed run left behind would make the root checks below
 		// pass without this run creating anything. The lab Vault is dev mode, so
 		// root may remove it.
@@ -118,6 +120,13 @@ func TestE2E(t *testing.T) {
 		}
 		for _, u := range []string{"alice", "bob", "carol", "dave", "erin"} {
 			testUserPassword(t, u)
+		}
+		// The health step's platform mounts.
+		if slices.Contains(vaultKeys(t, "secrets", "list", "-format=json"), "e2e-plat/") {
+			vaultRoot(t, "secrets", "disable", "e2e-plat")
+		}
+		if slices.Contains(vaultKeys(t, "auth", "list", "-format=json"), "e2e-plat/") {
+			vaultRoot(t, "auth", "disable", "e2e-plat")
 		}
 		// VCO's own login must be the one make lab-vault-bootstrap wrote.
 		if a := vaultKeys(t, "auth", "list", "-format=json"); !slices.Contains(a, vcoLoginMount+"/") {
@@ -1152,6 +1161,62 @@ spec:
 			}
 			return ""
 		})
+	})
+
+	step("health: a mount collision surfaces on its own tenant only", func(t *testing.T) {
+		// AC-OPS-1, AC-OPS-2. The platform has mounts at e2e-plat/ and
+		// auth/e2e-plat/ that parent.reservedPaths does not list. A tenant named
+		// e2e-plat then collides: Vault refuses its kv mount and its auth mount
+		// (a mount can't nest under another, N3, N7). The errors reach that
+		// tenant's outputs — on the parent for the kv mount, on its child TI for
+		// the auth mount and its roles — and no other tenant's.
+		const plat, platNS = "e2e-plat", "e2e-plat-dev"
+		vaultRoot(t, "secrets", "enable", "-path="+plat, "kv")
+		vaultRoot(t, "auth", "enable", "-path="+plat, "userpass")
+		t.Cleanup(func() {
+			deleteTenant(t, plat, platNS)
+			vaultRun(t, vaultRootToken, "secrets", "disable", plat)
+			vaultRun(t, vaultRootToken, "auth", "disable", plat)
+		})
+		createTenant(t, plat, platNS)
+		createServiceAccount(t, platNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
+		out := func(ti, field, key string) string {
+			o := get(t, gvrTemplateInstance, configNS, ti)
+			if o == nil {
+				return ""
+			}
+			v, _, _ := unstructured.NestedString(o.Object, "status", "outputs", field, key)
+			return v
+		}
+		waitFor(t, "the parent reports e2e-plat's kv mount error", func() string {
+			if v := out(parentName, "enginesLastError", plat+"-kv"); !strings.Contains(v, "in use") {
+				return "enginesLastError[" + plat + "-kv] = " + v
+			}
+			return ""
+		})
+		waitFor(t, "e2e-plat's child TI reports its auth mount and role errors", func() string {
+			if v := out(tiPrefix+plat, "authMountsLastError", plat+"-kubernetes"); !strings.Contains(v, "in use") {
+				return "authMountsLastError[" + plat + "-kubernetes] = " + v
+			}
+			if v := out(tiPrefix+plat, "k8sAuthRolesLastError", roleName(plat, platNS, "app")); v == "" || v == "[]" {
+				return "k8sAuthRolesLastError = " + v
+			}
+			return ""
+		})
+		// No other tenant is affected: their entries carry no error, and a
+		// workload of e2e-alpha still logs in and reads.
+		for _, k := range []string{alpha + "-kv", prefixT + "-kv", sharedName + "-kv"} {
+			if v := out(parentName, "enginesLastError", k); v != "[]" {
+				t.Errorf("enginesLastError[%s] = %q, want no error", k, v)
+			}
+		}
+		if v := out(tiPrefix+alpha, "authMountsLastError", alpha+"-kubernetes"); v != "[]" {
+			t.Errorf("e2e-alpha's authMountsLastError = %q, want no error", v)
+		}
+		tok, _ := vaultLogin(t, alpha, roleName(alpha, alphaNS, "web"), saToken(t, alphaNS, "web"))
+		if _, err := kvGet(t, tok, alpha, appPath(alphaNS, "web", "db"), "password"); err != nil {
+			t.Errorf("e2e-alpha's web could not read during e2e-plat's collision: %v", err)
+		}
 	})
 
 	step("role change: lowering editor to viewer takes write away", func(t *testing.T) {

@@ -2,4 +2,5 @@
 # chart's (hack/enterprise-contract.txt). '-' is Enterprise only, '+' is this
 # chart only. Every line names the story that removes it; the contract check
 # fails if the real difference is not exactly this list.
-- object PrometheusRule monitoring/<extension>-<tenant>  # C.11 health
+#
+# Empty since C.11: this chart's contract equals the Enterprise chart's.

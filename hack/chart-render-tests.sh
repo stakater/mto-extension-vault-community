@@ -63,6 +63,8 @@
 #                  mount, exactly its tenant's group, string claims, and accepts
 #                  exactly sso.oidc.clientId as its audience.
 #   falsestring  — the STRING "false" turns no feature on; "true" does.
+#   alertlabels  — the ESO alert selects only labels ESO exports (condition,
+#                  status, namespace) and names the tenant's namespaces.
 #   contract     — the workload contract (annotation keys, Deployment forms, role
 #                  names, object names, ConfigMap keys; hack/contract.sh) equals
 #                  the pinned Enterprise chart's (hack/enterprise-contract.txt),
@@ -660,12 +662,12 @@ check ssobind "$sb_ok" "$sb_detail"
 
 # falsestring — schema kept on: it accepts "false", which is the point
 fs_ok=0; fs_detail=""
-render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=false > "$WORK/fs-false.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"false\" did not render: $(first "$WORK/fs.err")]"; }
-yqs fson 'select(.kind == "JWTOIDCAuthEngineConfig" or .kind == "JWTOIDCAuthEngineRole" or (.kind == "AuthEngineMount" and .spec.type == "oidc")) | .kind' "$WORK/fs-false.yaml"
+render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=false --set-string monitoring.enabled=false > "$WORK/fs-false.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"false\" did not render: $(first "$WORK/fs.err")]"; }
+yqs fson 'select(.kind == "JWTOIDCAuthEngineConfig" or .kind == "JWTOIDCAuthEngineRole" or .kind == "PrometheusRule" or (.kind == "AuthEngineMount" and .spec.type == "oidc")) | .kind' "$WORK/fs-false.yaml"
 [ -z "$fson" ] || { fs_ok=1; fs_detail="$fs_detail [the string \"false\" rendered: $(sort -u <<<"$fson" | tr '\n' ' ')]"; }
-render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=true > "$WORK/fs-true.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"true\" did not render: $(first "$WORK/fs.err")]"; }
-yqs fsyes 'select(.kind == "JWTOIDCAuthEngineConfig") | .kind' "$WORK/fs-true.yaml"
-[ "$fsyes" = JWTOIDCAuthEngineConfig ] || { fs_ok=1; fs_detail="$fs_detail [the string \"true\" did not render SSO: '$fsyes']"; }
+render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=true --set-string monitoring.enabled=true > "$WORK/fs-true.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"true\" did not render: $(first "$WORK/fs.err")]"; }
+yqs fsyes 'select(.kind == "JWTOIDCAuthEngineConfig" or .kind == "PrometheusRule") | .kind' "$WORK/fs-true.yaml"
+[ "$(sort -u <<<"$fsyes" | tr '\n' ' ')" = "JWTOIDCAuthEngineConfig PrometheusRule " ] || { fs_ok=1; fs_detail="$fs_detail [the string \"true\" did not render SSO and monitoring: '$fsyes']"; }
 if "$HELM" template x "$WORK/noschema/tenant" -n "$NS" --set tenant=t --set-string sso.enabled=on --set sso.oidc.issuerUrl=https://idp > /dev/null 2>"$WORK/tg.err"; then
   fs_ok=1; fs_detail="$fs_detail [tenant sso.enabled=on without schema rendered]"
 else
@@ -676,6 +678,15 @@ if "$HELM" template x "$WORK/notpl/tenant" -n "$NS" --set tenant=t --set-string 
 fi
 check falsestring "$fs_ok" "$fs_detail"
 
+# alertlabels
+al_ok=0; al_detail=""
+yqs expr 'select(.kind == "PrometheusRule") | .spec.groups[].rules[].expr' "$WORK/all.raw"
+[ -n "$expr" ] || { al_ok=1; al_detail="$al_detail [values-full rendered no alert — the check proves nothing]"; }
+used="$(grep -oE '[a-z_]+ *=~? *"' <<<"$expr" | sed -E 's/ *=~? *"//' | sort -u | tr '\n' ' ')"
+[ "$used" = "condition namespace status " ] || { al_ok=1; al_detail="$al_detail [the alert selects labels '$used'; ESO exports only name, namespace, condition, status]"; }
+grep -q 'namespace=~"team-a-dev|team-a-tools"' <<<"$expr" || { al_ok=1; al_detail="$al_detail [the alert does not select the tenant's namespaces: $expr]"; }
+check alertlabels "$al_ok" "$al_detail"
+
 # contract
 ct_ok=0; ct_detail=""
 HELM="$HELM" YQ="$YQ" "$REPO_ROOT/hack/contract.sh" "$CHART" > "$WORK/contract.txt" 2>"$WORK/contract.err" \
@@ -684,7 +695,8 @@ HELM="$HELM" YQ="$YQ" "$REPO_ROOT/hack/contract.sh" "$CHART" > "$WORK/contract.t
 grep -v '^#' "$REPO_ROOT/hack/enterprise-contract.txt" | grep . | sort -u > "$WORK/ent-contract.txt"
 { comm -23 "$WORK/ent-contract.txt" "$WORK/contract.txt" | sed 's/^/- /'
   comm -13 "$WORK/ent-contract.txt" "$WORK/contract.txt" | sed 's/^/+ /'; } | sort > "$WORK/delta.real"
-grep -v '^#' "$REPO_ROOT/hack/contract-delta.txt" | sed 's/  #.*$//' | grep . | sort > "$WORK/delta.want"
+# An empty delta is the goal state: grep finding no line must not end the run.
+{ grep -v '^#' "$REPO_ROOT/hack/contract-delta.txt" || true; } | sed 's/  #.*$//' | { grep . || true; } | sort > "$WORK/delta.want"
 if ! diff "$WORK/delta.want" "$WORK/delta.real" > "$WORK/delta.diff"; then
   ct_ok=1
   ct_detail="$ct_detail [the contract drifted from Enterprise beyond hack/contract-delta.txt: $(grep -E '^[<>]' "$WORK/delta.diff" | sed -e 's/^< /listed but not real: /' -e 's/^> /real but not listed: /' | tr '\n' '|')]"

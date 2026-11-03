@@ -38,6 +38,9 @@ sso:
     - "http://localhost:8250/oidc/callback"
     - "https://vault.example.com/ui/vault/auth/{tenant}/oidc/sso/oidc/callback"
 
+monitoring:
+  enabled: true
+
 # Renders tokenPeriod.
 token:
   ttl: 3600
