@@ -35,11 +35,13 @@ class PostEditHookTest(unittest.TestCase):
                 shutil.copytree(os.path.join(ROOT, d), os.path.join(tmp, d))
             shutil.copy(os.path.join(ROOT, "Makefile"), tmp)
             roadmap = os.path.join(tmp, "docs", "roadmap.md")
-            text = open(roadmap, encoding="utf-8").read()
+            with open(roadmap, encoding="utf-8") as f:
+                text = f.read()
             # A story In progress with no planning doc that cites it.
             text = text.replace("**Story C.14 — Per-tenant audit recipe** 📝 *Draft*",
                                 "**Story C.14 — Per-tenant audit recipe** 🔨 *In progress*")
-            open(roadmap, "w", encoding="utf-8").write(text)
+            with open(roadmap, "w", encoding="utf-8") as f:
+                f.write(text)
             r = run_hook(roadmap, method_root=tmp)
             self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
             self.assertIn("C.14", r.stderr)
