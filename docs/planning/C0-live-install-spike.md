@@ -1,7 +1,7 @@
 # C.0 — Live-install spike
 
 Story: `docs/roadmap.md` C.0 (👍 Approved by Ayesha Arshad on 2026-11-02;
-🔨 In progress).
+✅ Done on 2026-11-03).
 Acceptance: none directly; it decides whether the AC-ISO scenarios are
 achievable as designed on Community Edition.
 

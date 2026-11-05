@@ -26,10 +26,13 @@
          - a name that is not a DNS label: the Tenant CRD does not restrict
            names, and a dot or an uppercase letter breaks the mount path, the
            label value and the dot-joined object names;
-         - a name longer than 63 characters: it is the tenant label value on
-           the kv mount CR below and in the child TI's namespaceSelector, and a
-           label value caps at 63. Rendered, it would fail the apply of this
-           whole render, for every tenant;
+         - a name longer than 29 characters: the child TI's name
+           mto-extension-vault-community-<tenant>.eso is stamped as a label
+           value on every object it renders, and a label value caps at 63
+           (the tenant chart fails the render at the same budget). One budget
+           whether ESO is on or off, so turning ESO on never skips a tenant
+           that had its mount. Rendered, the tenant got its mount and a failed
+           child, and was listed nowhere;
          - a reserved name: the first segment of a path Vault or the platform
            already uses. The tenant's mount <tenant>/kv and its auth mounts
            auth/<tenant>/... would nest under that path, and Vault refuses a
@@ -41,8 +44,8 @@
 {{- $n := toString $t.metadata.name }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $n) }}
 {{- $_ := set $skipped $n "the name is not a DNS label (lowercase letters, digits and hyphens, no dots): nothing is rendered for this tenant" }}
-{{- else if gt (len $n) 63 }}
-{{- $_ := set $skipped $n (printf "the name is %d characters: it is a label value, and label values cap at 63: nothing is rendered for this tenant" (len $n)) }}
+{{- else if gt (len $n) 29 }}
+{{- $_ := set $skipped $n (printf "the name is %d characters, over 29: the child TemplateInstance mto-extension-vault-community-<tenant>.eso is a label value, and label values cap at 63: nothing is rendered for this tenant" (len $n)) }}
 {{- else if eq $n $shared }}
 {{- $_ := set $skipped $n (printf "the name is the shared prefix %q of the shared mount %s/kv: nothing is rendered for this tenant" $shared $shared) }}
 {{- else if has $n $reserved }}
@@ -63,7 +66,7 @@
 ---
 apiVersion: v1
 kind: ConfigMap
-metadata: { name: mto-extension-vault-community-skipped-tenants, namespace: {{ $cfgNs }} }
+metadata: { name: mto-extension-vault-community-skipped-tenants, namespace: {{ $cfgNs | quote }} }
 data:
   {{- range $n, $reason := $skipped }}
   {{ $n | quote }}: {{ $reason | quote }}
@@ -73,7 +76,7 @@ data:
 ---
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: SecretEngineMount
-metadata: { name: {{ printf "%s-kv" $shared | quote }}, namespace: {{ $cfgNs }} }
+metadata: { name: {{ printf "%s-kv" $shared | quote }}, namespace: {{ $cfgNs | quote }} }
 spec:
   authentication:
     {{ $auth }}
@@ -97,7 +100,7 @@ spec:
 ---
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: SecretEngineMount
-metadata: { name: {{ printf "%s-kv" $name | quote }}, namespace: {{ $cfgNs }}, labels: { {{ $tenantLabel }}: {{ $name | quote }} } }
+metadata: { name: {{ printf "%s-kv" $name | quote }}, namespace: {{ $cfgNs | quote }}, labels: { {{ $tenantLabel }}: {{ $name | quote }} } }
 spec:
   authentication:
     {{ $auth }}
@@ -125,11 +128,11 @@ apiVersion: templates.v2.stakater.com/v2alpha1
 kind: TemplateInstance
 metadata:
   name: {{ printf "mto-extension-vault-community-%s%s" $name $slice.suffix | quote }}
-  namespace: {{ $cfgNs }}
+  namespace: {{ $cfgNs | quote }}
 spec:
   templateRef:
     name: {{ $childTemplate }}{{ $slice.tmpl }}
-    namespace: {{ $cfgNs }}
+    namespace: {{ $cfgNs | quote }}
   parameters:
     - name: tenant
       value: {{ $name | quote }}

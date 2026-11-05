@@ -200,6 +200,76 @@ collision surfaces on its own tenant only; the e2e preflight refuses Vault
 Enterprise. Satisfies **AC-OPS-1**, **AC-OPS-2**. Planning:
 [`planning/C11-health-and-preflight.md`](planning/C11-health-and-preflight.md).
 
+**Story C.17 — The review of Phases 1 and 2, closed** ✅ *Done*
+
+As a security owner, I want every finding of the adversarial review of Phases
+1 and 2 fixed and pinned by a test, so that the docs' promise "the admission
+policies hold for every writer of `vault-config`" is true and stays true.
+
+Approved by Ayesha Arshad on 2026-11-04 ("fix" on the review).
+
+Done: admission refuses every VCO kind the extension does not render, any
+`spec.connection`, and any `spec.authentication` but the install's; the origin
+check holds with a wrong `templateOperator.*`; the admission CEL runs offline
+in `make verify` against the cases of `hack/lab/admission-cases.sh`; the
+content checks read the `core` and `eso` renders; every fail branch of the
+render-time scope check has a bad input; `hack/mutation_tests.py` kills every
+listed guard mutation; install-wide values are validated at install; the
+tenant-name budget, group patterns, quoting, token zero, release and
+bump-check defects fixed; AC-ISO-10 proven with the role still in Vault; the
+docs match the code. Satisfies **AC-ISO-6**, **AC-ISO-7**, **AC-ISO-10**,
+**AC-ISO-11**, **AC-ISO-12**, **AC-OPS-1**. Planning:
+[`planning/C17-review-closed.md`](planning/C17-review-closed.md).
+
+**Story C.18 — The second review, closed** ✅ *Done*
+
+As a security owner, I want the findings of the review of C.17 fixed and
+pinned, so that no CR gets a new spec past admission while it is deleted, and
+the tests that guard the wall fail for the reason they name.
+
+Approved by Ayesha Arshad on 2026-11-04 ("Fix" on the second review).
+
+Done: a spec changed during a deletion is checked even when one side has no
+spec, and a VCO CR without a spec is refused; every refusal case names the
+policy that must give it, and UPDATE cases reach the kinds and origin
+policies; the offline runner checks every expression compiles for Kubernetes
+1.30 and runs an exact number of cases; each mutation names the check that
+must kill it; install values that would break every tenant fail the install;
+the docs say what is true. Satisfies **AC-ISO-6**, **AC-ISO-11**,
+**AC-ISO-12**. Planning:
+[`planning/C18-second-review-closed.md`](planning/C18-second-review-closed.md).
+
+**Story C.20 — The third review, closed** ✅ *Done*
+
+As a security owner, I want the findings of the review of C.18 fixed and
+pinned, so that no install value that passes the install breaks every tenant,
+and each guard's test fails only for that guard.
+
+Approved by Ayesha Arshad on 2026-11-05 (the third review's 8 findings, and
+"make the code true" for the deletion of a CR without a spec).
+
+Done: a one-sided `parent.token` value is checked against the tenant chart's
+default for the other side; a mount name with a trailing `/` renders as the
+admission policies expect; a group pattern with a control character, and two
+auth mounts on one path, fail the install; the schema types every
+`tenantValues` value the tenant chart reads; `schemakeys` pins the exact list
+of closed objects; a mutation is killed only by its own case, never by a
+crash or another guard, and a mutation text that matches more than once
+fails the run; the live admission run sends the deletion attack's first step
+and the update cases to a real API server, and the e2e pins the split of live
+and offline cases; a deletion is never blocked, also for a CR without a spec;
+the docs say what is true. Satisfies **AC-ISO-6**, **AC-ISO-11**,
+**AC-ISO-12**. Planning:
+[`planning/C20-third-review-closed.md`](planning/C20-third-review-closed.md).
+
+**Story C.19 — The C.17 and C.18 fixes in the Enterprise extension** 📝 *Draft*
+— in `stakater/mto-extension-vault-enterprise`, which has the same gaps: a
+group pattern without `{tenant}` binds one group in every tenant, role
+patterns can give two tenants one group, ServiceAccount and namespace names
+render unquoted, and a workload role binds its namespace by name only, not by
+name and tenant label (Q13, `design.md` §2). Contract parity (ADR-0001) holds
+without it: none of these is a contract change.
+
 ---
 
 ## Phase 3 — Complete and convergent
@@ -237,6 +307,8 @@ method can't be skipped by merging past a failing check.
 
 Done: `verify` listed in `required_status_checks_jobs` for this repo in
 `stakater/stakater-github-config`; a PR with a failing check can't be merged.
+Kind E2E is made required only where a run it skipped can't count as a pass
+(checked on a test PR), or it stays out of the list.
 
 **Story DX.2 — The method on every edit** ✅ *Done*
 

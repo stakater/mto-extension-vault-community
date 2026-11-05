@@ -19,7 +19,7 @@ namespaces **`team-a-api`** and **`team-a-worker`**, application **`web`**
 | **Access role** | annotation or identity-provider group | `audit-read`, `viewer`, `editor`, `admin`. Workloads get it from `vault.stakater.com/role`; people from the group `<tenant>-<role>s`. Enterprise names it a role, as here; it is not a login role. |
 | **VCO** | the cluster | vault-config-operator: turns `Policy`, `SecretEngineMount`, auth role CRs into Vault configuration. Logs in with its own role. |
 | **Template Operator** | Stakater | Renders the per-tenant chart once per tenant. |
-| **Bootstrap chart** | this repo | Installed once per cluster. Watches tenants, renders each tenant's mount, the shared mount and its auth mount, and the admission policies on VCO CRs. |
+| **Bootstrap chart** | this repo | Installed once per cluster. Watches tenants, renders each tenant's mount, the shared mount, and the admission policies on VCO CRs. |
 | **Per-tenant chart** | this repo | Pulled and rendered by Template Operator per tenant: the tenant's auth mounts, policies, roles, ConfigMaps, ESO objects. Never installed by hand. |
 
 Two words that are easy to confuse:

@@ -39,7 +39,7 @@ test: ## Tests for the method checks themselves.
 	$(PYTHON) -m unittest discover -s hack -p 'test_*.py'
 
 .PHONY: charts
-charts: helm-lint helm-render-test crd-validate ## Lint, render tests (incl. version pin), CRD schema check.
+charts: helm-lint helm-render-test crd-validate admission-offline ## Lint, render tests (incl. version pin), CRD schema check, admission CEL.
 
 # ─── Chart checks ────────────────────────────────────────────────────
 
@@ -69,6 +69,14 @@ helm-render-test: helm yq ## Render tests: emission, reserved names, mounts, RBA
 crd-validate: helm yq ## Validate every rendered VCO CR against VCO's CRDs (apiserver admission pipeline).
 	@test -d $(VCO_CRD_DIR) || { echo "error: VCO_CRD_DIR=$(VCO_CRD_DIR) does not exist" >&2; exit 1; }
 	HELM=$(HELM) YQ=$(YQ_BIN) ./hack/crd-validate.sh $(VCO_CRD_DIR)
+
+.PHONY: admission-offline
+admission-offline: helm ## Run the admission policies' CEL offline (k8s.io/apiserver's plugin) against hack/lab/admission-cases.sh.
+	HELM=$(HELM) ./hack/admission-offline.sh
+
+.PHONY: mutation-test
+mutation-test: helm yq ## Weaken each guard in a copy of the repo; a check must fail for every one (hack/mutation_tests.py).
+	HELM=$(HELM) YQ=$(YQ_BIN) $(PYTHON) hack/mutation_tests.py
 
 .PHONY: vco-crds-sync
 vco-crds-sync: helm ## Refresh hack/vco-crds from the VCO_VERSION release chart. Update hack/vco-crds/README.md with it.
@@ -175,6 +183,15 @@ CLUSTER_NAME ?= vault-ce-lab
 KIND_CONFIG  ?= hack/lab/kind-config.yaml
 # Every target names its context: never the ambient current-context.
 CONTEXT ?= kind-$(CLUSTER_NAME)
+# The lab targets delete pods, install dev-mode Vault and write root-token
+# state. CONTEXT is read from the environment too, so an exported CONTEXT=prod
+# would aim them at that cluster: they refuse any context but a kind one.
+LAB_GOALS := $(filter lab-% e2e-% admission-test,$(MAKECMDGOALS))
+ifneq ($(LAB_GOALS),)
+ifeq ($(filter kind-%,$(CONTEXT)),)
+$(error CONTEXT=$(CONTEXT) is not a kind cluster's context (kind-*): the lab targets ($(LAB_GOALS)) only run against the lab)
+endif
+endif
 KUBECTL ?= kubectl
 KIND    ?= kind
 CONTAINER_TOOL ?= docker
@@ -547,7 +564,8 @@ e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
 
 .PHONY: admission-test
 admission-test: ## Run the admission-policy cases against the lab (server-side dry runs; needs lab-bootstrap).
-	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) CONFIG_NS=$(CONFIG_NS) ./hack/lab/admission-cases.sh
+	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) CONFIG_NS=$(CONFIG_NS) ISSUER=$(DEX_ISSUER) \
+		TOV_USER=system:serviceaccount:$(TOV2_NS):$(TOV2_SA) ./hack/lab/admission-cases.sh
 
 # ─── Contract parity ─────────────────────────────────────────────────
 

@@ -15,12 +15,36 @@ git rev-parse --verify --quiet "$base^{commit}" > /dev/null \
 
 fail=0
 for dir in "$@"; do
+  # charts/a/ and charts/a are one chart: with the slash, "$base:$dir/Chart.yaml"
+  # was charts/a//Chart.yaml, which git can't find, so a changed chart read as
+  # a new one and passed without a bump.
+  while [ "${dir%/}" != "$dir" ]; do dir="${dir%/}"; done
+  # A path git can't name in the base (absolute, or a directory that is not
+  # there at all) read as a new chart and passed.
+  case "$dir" in
+    /*) echo "$dir: give the chart directory relative to the repository root" >&2; fail=1; continue ;;
+  esac
+  if [ ! -d "$dir" ]; then
+    if git cat-file -e "$base:$dir" 2>/dev/null; then
+      echo "$dir: removed"
+    else
+      echo "$dir: no such chart directory, here or on $base" >&2; fail=1
+    fi
+    continue
+  fi
   if git diff --quiet "$base...HEAD" -- "$dir"; then
     echo "$dir: unchanged"
     continue
   fi
   if ! base_chart="$(git show "$base:$dir/Chart.yaml" 2>/dev/null)"; then
-    echo "$dir: new chart"
+    # New only when the directory itself is not on the base; a chart whose
+    # Chart.yaml can't be read there is an error, not a pass.
+    if git cat-file -e "$base:$dir" 2>/dev/null; then
+      echo "$dir: exists on $base but has no readable Chart.yaml there" >&2
+      fail=1
+    else
+      echo "$dir: new chart"
+    fi
     continue
   fi
   old="$(awk '/^version:/{print $2; exit}' <<<"$base_chart")"

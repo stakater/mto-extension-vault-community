@@ -34,7 +34,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: Policy
 metadata:
   name: {{ $shareOutName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -47,7 +47,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: KubernetesAuthEngineRole
 metadata:
   name: {{ $shareOutName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -55,7 +55,7 @@ spec:
   name: {{ $shareOutName }}
   path: {{ $k8sMount }}
   targetServiceAccounts:
-    - {{ $saName }}
+    - {{ $saName | quote }}
   {{- include "vault.roleNamespaces" (dict "ns" $saNs "ctx" $) | nindent 2 }}
   policies:
     - {{ $shareOutName }}

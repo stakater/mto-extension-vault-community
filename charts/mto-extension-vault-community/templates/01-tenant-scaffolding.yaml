@@ -19,13 +19,13 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: AuthEngineMount
 metadata:
   name: {{ $name }}-kubernetes
-  namespace: {{ .Values.configNamespace }}
+  namespace: {{ .Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
   {{- include "vault.vcoAuth" $ | nindent 2 }}
   path: {{ printf "%s/%s" $name (trimAll "/" .Values.kubernetesAuth.path) | quote }}
-  name: {{ .Values.kubernetesAuth.name }}
+  name: {{ trimAll "/" .Values.kubernetesAuth.name | quote }}
   type: kubernetes
   # VCO adds its finalizer with an update that sends every config field, and
   # an unset listingVisibility goes as "", which VCO's own CRD enum refuses.
@@ -38,13 +38,13 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: KubernetesAuthEngineConfig
 metadata:
   name: {{ $name }}-kubernetes-config
-  namespace: {{ .Values.configNamespace }}
+  namespace: {{ .Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
   {{- include "vault.vcoAuth" $ | nindent 2 }}
   path: {{ printf "%s/%s" $name (trimAll "/" .Values.kubernetesAuth.path) | quote }}
-  name: {{ .Values.kubernetesAuth.name }}
+  name: {{ trimAll "/" .Values.kubernetesAuth.name | quote }}
   kubernetesHost: {{ .Values.kubernetesAuth.kubernetesHost }}
   {{- with .Values.kubernetesAuth.tokenReviewerServiceAccount }}
   tokenReviewerServiceAccount:

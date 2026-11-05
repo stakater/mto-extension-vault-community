@@ -53,7 +53,7 @@ root (C.0 Q16).
 
 **AC-ISO-8 — Names that would break the scope are refused.** *(R)* Tenants
 `sys`, `auth`, `identity`, `cubbyhole`, `agent-registry`, `shared`, `secret`,
-`Team_A` and a 64-character name get no mount and no child TI; each is listed with its
+`Team_A` and a 30-character name get no mount and no child TI; each is listed with its
 reason in the skipped-tenants ConfigMap.
 
 **AC-ISO-9 — No role administers Vault.** *(L)* `erin` (admin) is refused
@@ -65,17 +65,28 @@ namespace `team-a-gone` is deleted and created again with
 with 403, and VCO has bound the role to `__no_namespace__`. Created again with
 `team-a`'s label, `app` logs in (observed in C.0).
 
-**AC-ISO-11 — Out-of-scope VCO CRs are refused at admission.** *(L)* Every
-refusal case of `spikes/c0/q18-admission.sh` — a path outside the tenant, a
-share in the wrong direction, a role bound to another tenant's policy, mount,
+**AC-ISO-11 — Out-of-scope VCO CRs are refused at admission.** *(R+L)* Every
+refusal case of `hack/lab/admission-cases.sh` (ported from C.0's
+`spikes/c0/q18-admission.sh`) — a path outside the tenant, a share in the
+wrong direction, a role bound to another tenant's policy, mount,
 ServiceAccount or label, an SSO role for another tenant's group or with no
-claims, a mount or auth config of another shape, cluster or CA — is refused by
-the admission policy, each paired with its admitted twin (observed in C.0).
+claims, a mount or auth config of another shape, cluster or CA, a kind the
+extension does not render, a `spec.connection`, another
+`spec.authentication`, a CR without a spec, a spec widened, removed or put
+back with a connection during a deletion, an update that adds a connection —
+is refused by the rule of the policy the case names, and by no other, each
+paired with its admitted twin. Each case runs as a person, except 4 origin
+cases, which run as Template Operator; offline in `make verify` (`make
+admission-offline`, all 77 cases), and live on the lab (`make admission-test`,
+the e2e suite: 74 cases, the update and deletion cases on an old object
+created for real and held in deletion; the 3 whose old object the policies
+refuse run offline only, and the e2e pins that split).
 
-**AC-ISO-12 — Template Operator can't write for a tenant.** *(L)* A Template
+**AC-ISO-12 — Template Operator can't write for a tenant.** *(R+L)* A Template
 and TemplateInstance in `team-a-api` whose object names
 `namespace: vault-config` produce no VCO CR there: the origin policy refuses
-it (observed in C.0).
+it (observed in C.0), by its source label, whoever writes it and whatever
+`templateOperator.*` says (`hack/lab/admission-cases.sh`, Origin).
 
 ## Access roles
 
@@ -137,7 +148,9 @@ render test `contract` (`hack/contract.sh` against
 `hack/enterprise-contract.txt`; any difference must be listed in
 `hack/contract-delta.txt` with the story that removes it).
 **AC-OPS-1 — VCO errors surface per tenant.** *(L)* A broken role shows in
-`kubernetesAuthEngineRoleLastError` on the child TI (the mechanism observed in
-C.0, with `secretEngineMountLastError` and `policyLastError`).
+`k8sAuthRolesLastError` on the child TI, a broken kv mount in
+`enginesLastError` on the parent, a refused policy in `policiesLastError`
+(the mechanism observed in C.0; the field names are in `charts/README.md` →
+Health).
 **AC-OPS-2 — A mount collision surfaces, alone.** *(L)* A tenant named like an
 unlisted platform mount reports the error; other tenants are unaffected.

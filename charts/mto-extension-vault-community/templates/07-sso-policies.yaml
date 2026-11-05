@@ -48,15 +48,20 @@ Role ladder (most → least privilege):
 {{- range $uri := $.Values.sso.allowedRedirectUris }}
 {{- $redirects = append $redirects (replace "{tenant}" $tenant (toString $uri)) }}
 {{- end }}
+{{- $groups := dict }}
 {{- range $role := $.Values.sso.roles }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (toString $role)) }}{{ fail (printf "sso.roles entry %q is not a DNS label — it is a part of the dot-joined Vault role name sso.<tenant>.<role>" $role) }}{{ end }}
-{{- if eq (toString $role) "fallback" }}{{ fail "sso.roles entry \"fallback\" is reserved: sso.<tenant>.fallback is the name of the Vault role without a group binding (sso.tenantRoleMapping.fallback), so a role of that name would collide with it. Rename the role" }}{{ end }}
+{{- if eq (toString $role) "fallback" }}{{ fail "sso.roles entry \"fallback\" is reserved: sso.<tenant>.fallback is the name of Enterprise's Vault role without a group binding (sso.tenantRoleMapping.fallback), which this chart never renders, and a role of that name would read as one. Rename the role" }}{{ end }}
 {{- $caps := index $.Values.roleCaps $role }}
 {{- if not $caps }}{{ fail (printf "sso.roles includes %q but roleCaps has no entry for it" $role) }}{{ end }}
 {{- $roleName := include "vault.ssoRoleName" (dict "tenant" $tenant "role" $role) }}
 {{- $group := include "vault.ssoGroup" (dict "tenant" $tenant "role" $role
                                                "mapping" $.Values.sso.tenantRoleMapping
                                                "defaultTemplate" $.Values.sso.tenantGroupTemplate) }}
+{{- /* One group per role: a group bound to two roles gets both, which makes
+       the lower role meaningless ({tenant} alone gives one group all four). */ -}}
+{{- if hasKey $groups $group }}{{ fail (printf "sso: roles %s and %s of tenant %s bind the same group %q: its members would get both. Give each role its own group" (get $groups $group) $role $tenant $group) }}{{ end }}
+{{- $_ := set $groups $group $role }}
 {{- $policy := list (printf "# SSO role %s for tenant %s." $role $tenant) }}
 {{- /* The mount root, on its own line because <tenant>/kv/metadata/<env>/*
        does NOT match <tenant>/kv/metadata — a prefix glob never covers the
@@ -81,7 +86,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: Policy
 metadata:
   name: {{ $roleName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -94,7 +99,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: JWTOIDCAuthEngineRole
 metadata:
   name: {{ $roleName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:

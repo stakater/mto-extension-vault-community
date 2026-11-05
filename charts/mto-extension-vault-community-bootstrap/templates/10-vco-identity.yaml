@@ -1,7 +1,7 @@
 # The ServiceAccount every rendered VCO CR names in
 # spec.authentication.serviceAccount. VCO mints a short-lived token for it on
-# each login and logs in to Vault's kubernetes auth at vco.authPath, in
-# vco.namespace, with vco.role.
+# each login and logs in to Vault's kubernetes auth at vco.authPath with
+# vco.role. Vault Community has no namespaces, so there is no vco.namespace.
 #
 # No credential is stored: the Vault role binds this ServiceAccount by name and
 # namespace, and the token is minted per login. The Vault side is a one-time

@@ -8,9 +8,14 @@ And Template Operator applies objects into the config namespace for a Template
 in ANY namespace (T2). So every VCO CR in the config namespace is checked here,
 before VCO sees it, whoever writes it — the charts, Template Operator, a person:
 
-  origin   a VCO CR Template Operator writes must come from a TemplateInstance
-           in the config namespace (Template Operator overwrites the label
-           templates.v2.stakater.com/instance-namespace with the real source);
+  kinds    only the seven kinds the extension renders; no spec.connection (VCO
+           would log in with its root-equivalent token at that address); the
+           install's spec.authentication only;
+  origin   an object Template Operator renders must come from a TemplateInstance
+           in the config namespace: Template Operator stamps the label
+           templates.v2.stakater.com/instance-namespace with the real source
+           on every object it writes, so this holds whatever
+           templateOperator.* says;
   scope    names in a family, one-line policy stanzas with no sudo, every path
            in its tenant's scope, every role bound to exactly its own policy,
            its tenant's mount, its ServiceAccount and its namespace by name AND
@@ -18,7 +23,12 @@ before VCO sees it, whoever writes it — the charts, Template Operator, a perso
            the extension's shapes only, the OIDC config at the install's issuer;
   cluster  a Kubernetes auth config names this cluster's API and CA only.
 
-Failure policy Fail. A deletion is never blocked. Needs Kubernetes 1.30 (K2).
+Failure policy Fail. A deletion is never blocked: the finalizer updates of an
+object being deleted pass when its spec is unchanged, or when neither side has
+a spec. Any other update of it — a spec changed, removed or added — is checked
+like any other. Needs Kubernetes 1.30 (K2). The CEL runs offline in make
+verify (hack/admission-offline.sh) against the cases of
+hack/lab/admission-cases.sh.
 */ -}}
 {{- if eq (include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" "admission.enabled" "value" (.Values.admission | default dict).enabled)) "true" }}
 {{- $cfg := .Values.configNamespace }}
@@ -35,19 +45,28 @@ Failure policy Fail. A deletion is never blocked. Needs Kubernetes 1.30 (K2).
 {{- $issuer := $parentSso.issuerUrl | default "" }}
 {{- $tovSA := printf "system:serviceaccount:%s:%s" .Values.templateOperator.namespace .Values.templateOperator.serviceAccountName }}
 {{- $reviewer := .Values.kubernetesAuth.tokenReviewerServiceAccount | default "" }}
+{{- $vcoPath := toString .Values.vco.authPath }}
+{{- $vcoRole := toString .Values.vco.role }}
+{{- $vcoSA := toString .Values.vco.serviceAccount }}
 {{- /* The SSO group each role must bind: the install's pattern per role,
-       resolved as the tenant chart's vault.ssoGroup resolves it. */ -}}
-{{- $roles := $tsso.roles | default (list "admin" "editor" "viewer" "audit-read") }}
-{{- $mapping := $tsso.tenantRoleMapping | default dict }}
-{{- $defaultPattern := $tsso.tenantGroupTemplate | default "{tenant}-{role}s" }}
+       resolved and validated as installChecks validates it. */ -}}
 {{- $patterns := list }}
-{{- range $r := $roles }}
-{{- $e := get $mapping (toString $r) }}
-{{- $p := $defaultPattern }}
-{{- if and (kindIs "map" $e) $e.pattern }}{{ $p = $e.pattern }}{{ end }}
-{{- $patterns = append $patterns (printf "%s: %s" (toString $r | squote) ($p | squote)) }}
+{{- range $e := include "mto-extension-vault-community-bootstrap.ssoPatterns" . | fromYamlArray }}
+{{- $patterns = append $patterns (printf "%s: %s" ($e.role | squote) ($e.pattern | squote)) }}
 {{- end }}
-{{- range $v := list $cfg $label $shared $k8sPath $k8sName $ssoPath $ssoName $issuer $tovSA $reviewer .Values.kubernetesAuth.kubernetesHost $defaultPattern }}
+{{- $kinds := list }}
+{{- range $k := include "mto-extension-vault-community-bootstrap.vcoKinds" . | fromYamlArray }}
+{{- $kinds = append $kinds ($k.resource | squote) }}
+{{- end }}
+{{- /* Deletion: VCO removes its finalizer with an UPDATE of an object that has
+       a deletionTimestamp. That passes unchecked when the spec is unchanged:
+       both sides have the same spec, or neither side has one (a CR written
+       while the policies were off), so a deletion is never blocked. A spec
+       removed or put back is checked: a spec removed in one update and put
+       back with a connection in the next passed when "no spec" on one side
+       counted as unchanged, and VCO logs in before it deletes. */ -}}
+{{- $notDeleting := "!has(object.metadata.deletionTimestamp) || has(object.spec) != has(oldObject.spec) || (has(object.spec) && object.spec != oldObject.spec)" }}
+{{- range $v := list $cfg $label $shared $k8sPath $k8sName $ssoPath $ssoName $issuer $tovSA $reviewer .Values.kubernetesAuth.kubernetesHost $vcoPath $vcoRole $vcoSA }}
 {{- if or (contains "'" (toString $v)) (contains "\\" (toString $v)) }}
 {{- fail (printf "admission: the value %q contains a quote or a backslash, which the admission policies cannot embed" $v) }}
 {{- end }}
@@ -55,6 +74,61 @@ Failure policy Fail. A deletion is never blocked. Needs Kubernetes 1.30 (K2).
 {{- $reserved := splitList "," (include "mto-extension-vault-community-bootstrap.reservedNames" .) }}
 {{- $reservedCel := list }}
 {{- range $r := $reserved }}{{ if ne $r $shared }}{{ $reservedCel = append $reservedCel ($r | squote) }}{{ end }}{{ end }}
+---
+# Every redhatcop.redhat.io object in the config namespace: VCO has about 80
+# kinds, and the scope and cluster policies below read seven. Any other kind (an
+# AppRoleAuthEngineRole writes auth/<path>/role/<name>, which VCO's own policy
+# allows for kv.* names) and any spec.connection (VCO would send its
+# root-equivalent login JWT to that address, and the vco-admin role would take
+# it back) are refused. A VCO CR without a spec is refused here (but for the
+# finalizer update of one being deleted, which has no spec to change), so the
+# policies below, which read the spec, match only objects that have one. The
+# authentication block is the install's, so a CR can't make VCO log in as
+# another ServiceAccount or role.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: mto-extension-vault-community-vco-kinds
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: {{ $cfg | quote }} }
+    resourceRules:
+      - apiGroups: ["redhatcop.redhat.io"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["*"]
+        scope: Namespaced
+  matchConditions:
+    - name: not-deleting
+      expression: {{ $notDeleting | quote }}
+  variables:
+    - name: ours
+      expression: "request.resource.resource in [{{ join ", " $kinds }}]"
+  validations:
+    - expression: variables.ours
+      messageExpression: "'kind ' + request.kind.kind + ' is not one the extension renders: only [{{ join ", " $kinds | replace "'" "" }}] may be in the config namespace'"
+    - expression: "!variables.ours || has(object.spec)"
+      message: a VCO CR in the config namespace has a spec
+    - expression: "!variables.ours || !has(object.spec.connection)"
+      message: a VCO CR in the config namespace has no spec.connection; VCO connects only to its own Vault
+    - expression: >-
+        !variables.ours || (has(object.spec.authentication) &&
+          object.spec.authentication.path == {{ $vcoPath | squote }} &&
+          object.spec.authentication.role == {{ $vcoRole | squote }} &&
+          has(object.spec.authentication.serviceAccount) &&
+          object.spec.authentication.serviceAccount.name == {{ $vcoSA | squote }} &&
+          !has(object.spec.authentication.namespace) && !has(object.spec.authentication.targetNamespace))
+      message: a VCO CR logs in as the install's vco.authPath, vco.role and vco.serviceAccount, with no Vault namespace
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: mto-extension-vault-community-vco-kinds
+spec:
+  policyName: mto-extension-vault-community-vco-kinds
+  validationActions: [Deny]
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -70,18 +144,24 @@ spec:
         apiVersions: ["*"]
         operations: ["CREATE", "UPDATE"]
         resources: ["*"]
+        scope: Namespaced
   matchConditions:
-    - name: written-by-template-operator
-      expression: request.userInfo.username == {{ $tovSA | squote }}
     - name: not-deleting
-      expression: "!has(object.metadata.deletionTimestamp)"
+      expression: {{ $notDeleting | quote }}
+  variables:
+    - name: source
+      expression: >-
+        has(object.metadata.labels) && 'templates.v2.stakater.com/instance-namespace' in object.metadata.labels
+        ? object.metadata.labels['templates.v2.stakater.com/instance-namespace'] : ''
   validations:
-    # Template Operator overwrites this label with the real source, so a
-    # Template in a tenant namespace can't claim to be the extension's.
-    - expression: >-
-        has(object.metadata.labels) &&
-        'templates.v2.stakater.com/instance-namespace' in object.metadata.labels &&
-        object.metadata.labels['templates.v2.stakater.com/instance-namespace'] == {{ $cfg | squote }}
+    # Template Operator stamps this label on every object it writes, with the
+    # TemplateInstance's real namespace, so a Template in a tenant namespace
+    # can't claim to be the extension's — whoever the writer is, and whatever
+    # templateOperator.* names.
+    - expression: variables.source == '' || variables.source == {{ $cfg | squote }}
+      messageExpression: "'a VCO object Template Operator renders for a TemplateInstance in ' + variables.source + ' cannot be in the config namespace'"
+    # And Template Operator itself writes nothing without it.
+    - expression: request.userInfo.username != {{ $tovSA | squote }} || variables.source == {{ $cfg | squote }}
       message: a VCO object in the config namespace must come from a TemplateInstance in the config namespace
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -113,9 +193,12 @@ spec:
           - authenginemounts
           - jwtoidcauthengineconfigs
   matchConditions:
-    # A delete only removes finalizers; never block it.
+    # A finalizer update during a deletion passes; a spec change does not.
     - name: not-deleting
-      expression: "!has(object.metadata.deletionTimestamp)"
+      expression: {{ $notDeleting | quote }}
+    # The kinds policy refuses an object without a spec.
+    - name: has-spec
+      expression: has(object.spec)
   variables:
     - name: kind
       expression: request.kind.kind
@@ -168,7 +251,10 @@ spec:
             (variables.fam == 'share' && size(variables.parts) == 6 && variables.dir in ['in', 'out'] && variables.kind != 'JWTOIDCAuthEngineRole') ||
             (variables.fam == 'sso' && size(variables.parts) == 3 && variables.kind != 'KubernetesAuthEngineRole')))
       messageExpression: "'name ' + variables.vname + ' is not in the kv. (4 parts), share. (6) or sso. (3) family of a valid tenant'"
-    # Policies: one-line stanzas only, no sudo, every path in the name's scope.
+    # Policies: no type (VCO would write sys/policies/<type>/), one-line
+    # stanzas only, no sudo, every path in the name's scope.
+    - expression: variables.kind != 'Policy' || !has(object.spec.type)
+      message: a policy has no spec.type
     - expression: >-
         variables.kind != 'Policy' ||
         variables.lines.all(l, l.matches('^path\\s+"[^"]+"\\s*\\{\\s*capabilities\\s*=\\s*\\[\\s*"[a-z]+"(\\s*,\\s*"[a-z]+")*\\s*\\]\\s*\\}$') && !l.contains('"sudo"'))
@@ -262,7 +348,9 @@ spec:
         resources: ["kubernetesauthengineconfigs"]
   matchConditions:
     - name: not-deleting
-      expression: "!has(object.metadata.deletionTimestamp)"
+      expression: {{ $notDeleting | quote }}
+    - name: has-spec
+      expression: has(object.spec)
   validations:
     - expression: >-
         object.spec.kubernetesHost == {{ .Values.kubernetesAuth.kubernetesHost | squote }} &&

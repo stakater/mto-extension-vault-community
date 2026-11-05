@@ -66,7 +66,7 @@ Tenant chart `charts/mto-extension-vault-community/`:
   ```
 
   The `_shared` grants and the share annotations come in C.7 and C.8.
-- `templates/00-component.yaml`: calls the component and label guards, so a
+- `templates/00-guards.yaml`: calls the component and label guards, so a
   tenant with nothing annotated still fails on a bad value.
 
 Bootstrap: the parent no longer renders `shared-kubernetes` or its config

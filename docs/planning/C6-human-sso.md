@@ -55,9 +55,9 @@ the CLI callback and one UI callback per lab tenant — Dex has no wildcard.
 
 Render: `ssoredirect` (an empty list fails; `{tenant}` is replaced per
 tenant), `ssorootlist` (every SSO policy lists `<tenant>/kv/metadata`),
-`ssoroles` (a non-DNS role and `fallback` fail), `ssofallback` (a fallback
-mapping fails the render), `ssoaudience` (every role accepts exactly the
-client ID), `mountagree` for the OIDC mount, `toggles` and `falsestring` for
+`ssoroles` (a non-DNS role and `fallback` fail, and a fallback mapping fails
+the render), `ssobind` (every role binds its own policy, mount and group, and
+accepts exactly the client ID as its audience), `mountagree` for the OIDC mount, `toggles` and `falsestring` for
 `sso.enabled`, `namecollide` across families (tenant `sso`'s own Policy vs
 tenant `acme`'s SSO Policy), `removedkeys` (tenant half), `contract` with the
 SSO delta lines removed.

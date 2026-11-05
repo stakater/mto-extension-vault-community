@@ -41,7 +41,8 @@ regression test pins the behaviour it fixed.
 | Approval gate | human in the loop | 📝 Draft → 👍 Approved only by a human | `.github/CODEOWNERS` owns `docs/roadmap.md` and `docs/adr/`; branch protection requires a code owner's review |
 | PRs trace to a story | traceability | every PR cites its story code | PR workflow: `check_method.py pr-body` fails without a known code or `No story: <reason>` |
 | Immutable decisions | ADRs (Nygard) | `docs/adr/`, superseded never edited | PR workflow: `check_method.py adr-diff` fails if an Accepted ADR changes beyond `Superseded by ADR-NNNN`; `make method` checks status values and the index |
-| Test first | TDD (Beck) | a failing render test (golden, schema, guard) or acceptance check before the change | `make verify`: the render harness (`hack/chart-render-tests.sh`), every guard mutation-tested; the e2e suite for live behaviour |
+| Test first | TDD (Beck) | a failing render test (golden, schema, guard) or acceptance check before the change | `make verify`: the render harness (`hack/chart-render-tests.sh`) and the admission CEL run offline (`make admission-offline`); the e2e suite for live behaviour |
+| Every guard mutation-tested | mutation testing | each guard listed in `hack/mutation_tests.py`, weakened, must fail the check the list names, through the guard's own case | `make mutation-test` in CI: a mutation that survives, is caught by another check, by a crash or by another guard's case, matches more than once, or no longer applies fails the run; `make test` pins these rules |
 | Green before done | Definition of Done | `make verify` green, output seen | `make verify` locally; the same target in CI on every PR |
 | Docs move with the code | docs as source of truth | a change that leaves `docs/` stale is unfinished | `make lint` (markdownlint) and `make links` (every relative link resolves); review |
 | Facts before design | evidence over inference | Vault behaviour cited to `vault-community-baseline.md` rows; unknowns marked VERIFY | review; C.0 |
@@ -55,6 +56,7 @@ regression test pins the behaviour it fixed.
 | Gap | Until it closes | Story |
 |---|---|---|
 | The `verify` check is not yet a required status check, so a red PR can still be merged | reviewers don't merge red | DX.1 |
+| Kind E2E runs on request, and its job is skipped when no request came: if it ever becomes a required check, a skipped run may count as a pass (not confirmed) | reviewers read the run, not the check's colour | DX.1 |
 
 ## Story lifecycle
 
@@ -109,7 +111,8 @@ regression tests rather than personas signing off.
 ## Running the checks
 
 ```sh
-make verify   # lint + links + method + test: the Definition of Done gate
+make verify   # lint + links + method + test + charts: the Definition of Done gate
+make mutation-test   # every listed guard, weakened, must fail its named check (CI runs it)
 make method   # roadmap, planning docs and ADR rules only
 python3 hack/check_method.py adr-diff --base origin/main   # what CI runs on a PR
 ```

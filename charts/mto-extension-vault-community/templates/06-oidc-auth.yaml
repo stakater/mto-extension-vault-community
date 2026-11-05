@@ -26,13 +26,13 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: AuthEngineMount
 metadata:
   name: {{ $name }}-oidc
-  namespace: {{ .Values.configNamespace }}
+  namespace: {{ .Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
   {{- include "vault.vcoAuth" $ | nindent 2 }}
   path: {{ printf "%s/%s" $name (trimAll "/" .Values.sso.mount.path) | quote }}
-  name: {{ .Values.sso.mount.name }}
+  name: {{ trimAll "/" .Values.sso.mount.name | quote }}
   type: oidc
   # listingVisibility: see the kubernetes mount (01-tenant-scaffolding.yaml).
   config:
@@ -42,7 +42,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: JWTOIDCAuthEngineConfig
 metadata:
   name: {{ $name }}-oidc-config
-  namespace: {{ .Values.configNamespace }}
+  namespace: {{ .Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -56,7 +56,7 @@ spec:
   OIDCClientID: {{ .Values.sso.oidc.clientId | quote }}
   OIDCCredentials:
     secret:
-      name: {{ .Values.sso.oidc.clientSecretRef.name }}
+      name: {{ .Values.sso.oidc.clientSecretRef.name | quote }}
     passwordKey: {{ .Values.sso.oidc.clientSecretRef.key }}
 {{- end }}
 {{- end }}

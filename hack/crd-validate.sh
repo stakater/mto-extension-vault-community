@@ -4,10 +4,11 @@
 #
 # Coverage is per render path: the tenant chart at component=all and at each
 # slice, for every fixture, plus the parent gotemplate's mounts. Each render
-# path must check exactly the number of CRs it emits today, so a render that
-# silently drops objects fails here (a bare -min 1 accepted a render that fell
-# to one object). The eso slice emits none by design. When a fixture or
-# template changes the count on purpose, update the table below.
+# path must check exactly the number of CRs it emits today (-want), so a
+# render that silently drops or gains objects fails here (a bare minimum of 1
+# accepted a render that fell to one object). The eso slice emits none by
+# design. When a fixture or template changes the count on purpose, update the
+# table below.
 #
 # Usage: hack/crd-validate.sh <crd-dir>
 set -euo pipefail
@@ -28,8 +29,9 @@ trap 'rm -rf "$WORK"' EXIT
 fail=0
 
 validate() { # validate <label> <manifest> <expected-count>
-  local args=(-min "$3")
-  [ "$3" = 0 ] && args=(-allow-empty)
+  local args=(-want "$3")
+  # Zero is a count too: the eso slice must still render no VCO CR.
+  [ "$3" = 0 ] && args=(-allow-empty -want 0)
   printf '%-26s ' "$1"
   if ! (cd "$REPO_ROOT" && go run ./hack/crd-validate "${args[@]}" "$CRDS" "$2"); then
     fail=1
@@ -80,7 +82,7 @@ fi
 "$YQ" e '.metadata.annotaions = {"x": "y"}' "$WORK/meta-ok.yaml" > "$WORK/meta-typo.yaml"
 validate "self-test (clean mount)" "$WORK/meta-ok.yaml" 1
 printf '%-26s ' "self-test (metadata typo)"
-if (cd "$REPO_ROOT" && go run ./hack/crd-validate -min 1 "$CRDS" "$WORK/meta-typo.yaml") > "$WORK/self.out" 2>&1; then
+if (cd "$REPO_ROOT" && go run ./hack/crd-validate -want 1 "$CRDS" "$WORK/meta-typo.yaml") > "$WORK/self.out" 2>&1; then
   echo "FAIL a misspelt metadata key validated"; fail=1
 elif grep -q 'unknown field "annotaions"' "$WORK/self.out"; then
   echo "OK refused: unknown field \"annotaions\""

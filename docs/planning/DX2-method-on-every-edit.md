@@ -12,15 +12,17 @@ the same here for Claude Code sessions, which edit most of this repo's docs.
 
 ## Governing constraints
 
-- `docs/method.md`, "Known enforcement gaps": nothing runs on each local edit.
+- `docs/method.md`, "Known enforcement gaps", had the row "nothing runs on
+  each local edit"; this story removed it.
 - The checks check: the hook has a test that fails when it stops reporting.
 - No secret in any file; the hook reads only the edited path.
 
 ## Design
 
 - `hack/claude-post-edit.sh`: a PostToolUse hook. It reads the tool call's
-  JSON on stdin, and for an edited `*.md` file runs `make method links` in the
-  repository (or `METHOD_ROOT`). A failure exits 2 with the output on stderr,
+  JSON on stdin, and for an edited `*.md` file inside the repository (or
+  `METHOD_ROOT`) runs `make method links` there; a Markdown file elsewhere
+  runs nothing (added in C.17). A failure exits 2 with the output on stderr,
   which Claude Code shows to the agent; anything else exits 0.
 - `.claude/settings.json`: the hook on `Edit|Write|MultiEdit`.
 - `hack/test_post_edit_hook.py`: a non-Markdown edit runs nothing; a Markdown

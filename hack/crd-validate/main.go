@@ -19,7 +19,7 @@
 // pruning diff finds exactly the fields SSA would reject; the rest is what makes
 // "validates like the apiserver" true rather than approximately true.
 //
-// Usage: go run ./hack/crd-validate [-allow-empty] [-min N] <crd-dir> <file|->
+// Usage: go run ./hack/crd-validate [-allow-empty] [-want N] <crd-dir> <file|->
 package main
 
 import (
@@ -68,11 +68,13 @@ type crdEntry struct {
 func main() {
 	// A component slice can legitimately render nothing; a full render cannot.
 	allowEmpty := flag.Bool("allow-empty", false, "do not fail when the input contains no "+group+" objects")
-	// "OK 1" and "OK 42" read alike, so a collapsed render still looks like a pass.
-	minObjects := flag.Int("min", 0, "fail if fewer than N "+group+" objects were checked")
+	// "OK 1" and "OK 42" read alike, so a collapsed render still looks like a
+	// pass. Exact, not a minimum: a render that grew an object nobody expected
+	// is as much a change as one that lost one.
+	wantObjects := flag.Int("want", -1, "fail unless exactly N "+group+" objects were checked (-1: any number)")
 	flag.Parse()
 	if flag.NArg() != 2 {
-		fmt.Println("usage: crd-validate [-allow-empty] <crd-dir> <rendered.yaml|->")
+		fmt.Println("usage: crd-validate [-allow-empty] [-want N] <crd-dir> <rendered.yaml|->")
 		os.Exit(2)
 	}
 	crds, err := loadCRDs(flag.Arg(0))
@@ -167,8 +169,9 @@ func main() {
 		if err := apiservervalidation.ValidateCustomResource(nil, admitted, validator); err != nil {
 			problems = append(problems, fmt.Sprintf("%s: %v", id, err))
 		}
-		// 3. CEL — the cross-field invariants a schema cannot express, e.g.
-		//    "exactly one of spec.kvV2, spec.transit, spec.pki must be set".
+		// 3. CEL — the x-kubernetes-validations rules of the CRD. VCO v1.0.3's
+		//    CRDs carry none; this runs them anyway, so a rule added upstream
+		//    is enforced here when hack/vco-crds is synced.
 		celErrs, _ := entry.cel.Validate(context.TODO(), nil, entry.structural,
 			admitted, nil, celconfig.RuntimeCELCostBudget)
 		for _, e := range celErrs {
@@ -189,8 +192,8 @@ func main() {
 		fmt.Println("NO-OBJECTS no", group, "resources in", flag.Arg(1))
 		os.Exit(2)
 	}
-	if checked < *minObjects {
-		fmt.Printf("TOO-FEW checked %d %s objects, expected at least %d\n", checked, group, *minObjects)
+	if *wantObjects >= 0 && checked != *wantObjects {
+		fmt.Printf("WRONG-COUNT checked %d %s objects, expected exactly %d\n", checked, group, *wantObjects)
 		os.Exit(1)
 	}
 	fmt.Printf("OK %d %s objects validate against the operator chart CRDs\n", checked, group)

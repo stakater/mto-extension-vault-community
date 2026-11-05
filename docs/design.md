@@ -1,6 +1,8 @@
 # Design
 
-**Status:** proposed; every story is Draft. Baseline Vault Community 2.1.1 and
+**Status:** built: Phases 1 and 2 (C.1 to C.11, and C.17, the review's
+fixes) are done and proven on a live Vault Community 2.1.1 with VCO v1.0.3
+(`make e2e-kind`); Phase 3 is Draft. Baseline Vault Community 2.1.1 and
 VCO v1.0.3. Facts are cited to `vault-community-baseline.md` by row (e.g.
 **N2**); decisions to ADRs. Verified on a live install in story C.0
 ([`spikes/c0-findings.md`](spikes/c0-findings.md), questions cited as **Q13**).
@@ -52,13 +54,14 @@ The three differences from the Enterprise charts:
    namespace bounds what VCO writes; on Community nothing in Vault does —
    VCO's policy bounds names and mount types, not what a policy grants (P6,
    Q16). So the bootstrap chart installs admission policies that refuse a VCO
-   CR in `vault-config` whose content leaves its tenant's scope, or that
-   Template Operator writes for a TemplateInstance outside `vault-config`
-   (§4, ADR-0003, ADR-0008).
+   CR in `vault-config` of a kind the extension does not render, with a
+   `spec.connection` or another `spec.authentication`, whose content leaves
+   its tenant's scope, or that Template Operator writes for a TemplateInstance
+   outside `vault-config` (§4, ADR-0003, ADR-0008).
 
 Each role also binds its namespace by name **and** tenant label (Q13). That is
 not a difference by intent: the Enterprise chart binds by name only and has
-the same gap; the fix belongs in both.
+the same gap; the fix belongs in both (story C.19).
 
 ## 3. What is rendered
 
@@ -72,12 +75,12 @@ environment `dev`.
 | `AuthEngineMount` + `KubernetesAuthEngineConfig` | tenant chart, per tenant | `team-a-kubernetes` | `auth/team-a/kubernetes/workloads/` |
 | `AuthEngineMount` + `JWTOIDCAuthEngineConfig` | tenant chart, per tenant, with SSO | `team-a-oidc` | `auth/team-a/oidc/sso/` |
 | `Policy` | tenant chart, per ServiceAccount | `kv.team-a.team-a-api.web` | see below |
-| `KubernetesAuthEngineRole` | tenant chart, per ServiceAccount | `kv.team-a.team-a-api.web` | on `team-a/kubernetes/workloads`, bound to `web` in the namespace selected by `kubernetes.io/metadata.name: team-a-api` and `stakater.com/tenant: team-a` (V10), policy of the same name, TTL ≤ 1 h |
+| `KubernetesAuthEngineRole` | tenant chart, per ServiceAccount | `kv.team-a.team-a-api.web` | on `team-a/kubernetes/workloads`, bound to `web` in the namespace selected by `kubernetes.io/metadata.name: team-a-api` and `stakater.com/tenant: team-a` (V10), policy of the same name, token TTL 1 h, renewable to 4 h (`token.ttl`, `token.maxTTL`) |
 | `Policy` + `KubernetesAuthEngineRole` | per export / import | `share.team-a.team-a-api.web.out.team-b` / `.in.team-b` | on `team-a/kubernetes/workloads` (the tenant's own mount, ADR-0007); `shared/kv/data/dev/from-team-a/to-team-b/*` write / `from-team-b/to-team-a/*` read |
 | `Policy` + `JWTOIDCAuthEngineRole` | per SSO role | `sso.team-a.editor` | on `team-a/oidc/sso`, `bound_claims.groups: [team-a-editors]`, policy over `team-a/kv/` at that role |
 | ConfigMap | per ServiceAccount | `vault-config-web` | `VAULT_ADDR`, `VAULT_K8S_MOUNT=team-a/kubernetes/workloads`, `VAULT_K8S_ROLE`, `VAULT_KV_APP_PATH=team-a/kv/data/dev/team-a-api/web/`, `VAULT_KV_SHARED_OUT_PATH`, `VAULT_FROM_<NS>_PATH`, `VAULT_OUT_<PEER>_*`, `VAULT_IN_<PEER>_*`; **`VAULT_NAMESPACE` empty** |
 | `SecretStore` (slice `eso`) | per ServiceAccount | `web-vault` | `path: team-a/kv`, `version: v2`, no `namespace`, Kubernetes auth on `team-a/kubernetes/workloads` with role `kv.team-a.team-a-api.web` |
-| `ValidatingAdmissionPolicy` and binding (not VCO) | bootstrap, once | `…-vco-origin`, `…-vco-scope`, `…-vco-cluster` | none: Kubernetes admission on the VCO CRs in `vault-config` (§4) |
+| `ValidatingAdmissionPolicy` and binding (not VCO) | bootstrap, once | `…-vco-kinds`, `…-vco-origin`, `…-vco-scope`, `…-vco-cluster` | none: Kubernetes admission on the VCO CRs in `vault-config` (§4) |
 
 The workload policy at `editor`:
 
@@ -107,44 +110,69 @@ before it can exist:
 
 | Rule | Why |
 |---|---|
-| every Policy, role and ConfigMap name is in a family (`kv.` 4 parts, `share.` 6, `sso.` 3), every part a DNS label, and its second part is `t` | no tenant renders another tenant's or a platform object |
-| a policy is one-line `path "…" { capabilities = [...] }` stanzas, with no `sudo` | the check sees every path; a JSON body or a split stanza can't hide one |
+| a VCO CR in `vault-config` is one of the seven kinds the extension renders, has a spec and no `spec.connection`, and logs in with the install's `vco.authPath`, `vco.role` and `vco.serviceAccount` and no Vault namespace | VCO's token is root-equivalent: another kind (an `AppRoleAuthEngineRole` on `auth/<t>/…/role/kv.*`) would write unchecked, and a `spec.connection` would send VCO's login JWT to another host, which could replay it here |
+| every Policy and role name is in a family (`kv.` 4 parts, `share.` 6, `sso.` 3), every part a DNS label, and its second part is `t` | no tenant renders another tenant's or a platform object |
+| a policy has no `type`, and is one-line `path "…" { capabilities = [...] }` stanzas, with no `sudo` | the check sees every path; a JSON body or a split stanza can't hide one; with a `type` VCO would write `sys/policies/acl/…` instead |
 | every path of `kv.t.…` and `sso.t.…` is under `t/kv/{data,metadata,delete,undelete,destroy}/<env>/`; an SSO role may also list `t/kv/metadata` | nothing outside the tenant, and not the mount's `config` (ADR-0004) |
 | every path of `share.t.<ns>.<sa>.out.p` is `shared/kv/{data,metadata}/<env>/from-t/to-p/*`; of `….in.p`, `…/from-p/to-t/*`, with read and list only | a share in its own direction, to its named peer |
 | the tenant segment is always followed by `/` before any wildcard; `*` appears only as the final character after a `/`; no `+` | `team-a*` would match `team-ab/` (P2) |
 | a workload role binds only its own policy, its tenant's mount `t/kubernetes/workloads` (for `share.` roles too), its own ServiceAccount, and its namespace by `kubernetes.io/metadata.name` AND `stakater.com/tenant: t` | a role can't hand out another tenant's policy, and a namespace name reused by another tenant gets nothing (Q13) |
-| an SSO role binds only its own policy, `t/oidc/sso`, and exactly the tenant's group from the configured pattern, with string claims | no group of one tenant gets another's role; no role without bound claims (Enterprise's `fallback` is refused) |
+| an SSO role binds only its own policy, `t/oidc/sso`, and exactly the tenant's group from the configured pattern, with string claims; every pattern holds `{tenant}` once, and (tenant, role) → group is one to one: no two tenants, and no two roles of one tenant, share a group (checked at install) | no group of one tenant gets another's role; no group gets a role in every tenant, or two roles of one; no role without bound claims (Enterprise's `fallback` is refused) |
 | a mount is `t/kv` of type `kv`, `t/kubernetes/workloads` or `t/oidc/sso`, with no audit or header settings; an auth config names this cluster's API and CA and the install's IdP | VCO is asked for nothing else |
 
 Enforced four times:
 
-1. in the chart's `_helpers.tpl`: a violating object fails the render;
-1. in the render-test harness (`policyscope`, mutation-tested);
+1. in the chart's `_helpers.tpl`: a policy that leaves its scope fails the
+   render (`vault.assertPolicyScope`), and the roles are built from the same
+   names, mount and selector;
+1. in the render-test harness (`policyscope` on the `all` render and on each
+   slice, `union` content equality, `scopebranches` with a bad input per
+   branch of the helper);
 1. by the parent, refusing tenant names that would break it (§5);
-1. **at the API server**, by three ValidatingAdmissionPolicies on the VCO CRs
-   in `vault-config`, which the bootstrap chart installs (spike:
-   [`c0/q18-admission.yaml`](spikes/c0/q18-admission.yaml), 34 of 34 cases):
-    - `origin`: a VCO CR that Template Operator writes must come from a
+1. **at the API server**, by four ValidatingAdmissionPolicies on the
+   `redhatcop.redhat.io` objects in `vault-config`, which the bootstrap chart
+   installs (spike: [`c0/q18-admission.yaml`](spikes/c0/q18-admission.yaml),
+   34 of 34 cases):
+    - `kinds`: the seven kinds only, with a spec, no `spec.connection`, the
+      install's `spec.authentication`;
+    - `origin`: an object Template Operator renders must come from a
       TemplateInstance in `vault-config`. A Template in a tenant namespace can
       name `namespace: vault-config`, and Template Operator applies it with its
-      own rights (T2, Q18b);
+      own rights (T2, Q18b). Template Operator stamps every object with its
+      source namespace, so the check reads that label for every writer, and
+      a wrong `templateOperator.*` can't switch it off;
     - `scope`: the rules above, for every writer — the charts, Template
       Operator, a person;
     - `cluster`: a Kubernetes auth config names this cluster's API, and a CA
       equal to `kube-root-ca.crt` (V11).
 
-   Failure policy `Fail`; a deletion is never blocked, and VCO's own
-   finalizer updates pass.
+   Failure policy `Fail`; a deletion is never blocked: VCO's finalizer
+   updates of an object being deleted pass while its spec is unchanged, or
+   while neither side has a spec (a CR written with the policies off), and a
+   spec changed, removed or added during a deletion is checked like any
+   other. `make verify` runs the CEL offline, through k8s.io/apiserver's own
+   admission plugin, against the 77 cases of `hack/lab/admission-cases.sh`,
+   each policy on its own, and compiles every expression as a Kubernetes 1.30
+   API server does; the e2e suite runs 74 of them on the lab, the update and
+   deletion cases on an old object created for real and held in deletion by
+   a finalizer. The 3 whose old object admission refuses (a spec out of
+   scope, or no spec) run offline only.
 
 The first three catch the extension's own mistakes; the fourth is the wall,
-because it holds for anyone who can write to `vault-config`.
+because it holds for anyone who can write to `vault-config`. Every guard
+listed in `hack/mutation_tests.py` is mutation-tested: weakened, it must fail
+the check the list names (`make mutation-test`).
 
 ## 5. Tenant names
 
 The parent **skips** a Tenant, and lists it with the reason in ConfigMap
 `mto-extension-vault-community-skipped-tenants`, when its name is:
 
-- not a DNS label, or longer than 63 characters (as in Enterprise);
+- not a DNS label, or longer than 29 characters: the child TemplateInstance
+  `mto-extension-vault-community-<tenant>.eso` is a label value, which caps at
+  63, and the tenant chart refuses the same budget. The budget is set before
+  the first release; lowering it later would skip tenants that rendered
+  before, and they would lose their access (not their data);
 - `shared` (`parent.sharedTenantName`);
 - a reserved Vault path: `sys`, `auth`, `identity`, `cubbyhole`, and
   `agent-registry`, which Vault 2.1.1 mounts on its own (N8); and, because a
@@ -158,9 +186,9 @@ The parent **skips** a Tenant, and lists it with the reason in ConfigMap
 
 A name that collides with a mount the list misses fails in Vault with a 400
 on that tenant's mount CR alone, which gets no finalizer (N3, V8); VCO's error
-reaches the TemplateInstance outputs — `secretEngineMountLastError` on the
-parent, `authEngineMountLastError` on the child (T1) — and no other tenant is
-affected.
+reaches the TemplateInstance outputs — `enginesLastError` on the parent,
+`authMountsLastError` on the child (T1; `charts/README.md` → Health) — and no
+other tenant is affected.
 
 ## 6. VCO's login policy (ADR-0008)
 
@@ -169,7 +197,8 @@ Edition it writes in the same namespace as everything else — including its own
 policy. Its policy is narrowed **by name and by mount type**. It is the
 Enterprise production policy with each tenant namespace `+/` turned into the
 tenant prefix (full text and comments:
-[`spikes/c0/vco-admin-policy.hcl`](spikes/c0/vco-admin-policy.hcl)):
+[`charts/examples/vco-admin-policy.hcl`](../charts/examples/vco-admin-policy.hcl);
+the render test `vcopolicy` pins exactly these paths):
 
 ```hcl
 path "sys/mounts"           { capabilities = ["read"] }
@@ -218,7 +247,14 @@ tenant's Vault namespace. So on Community:
   create tokens for `vault-config/vco-admin` or exec into VCO; its login role
   binds `vault-config` only (V13).
 - **What VCO is asked is bounded at admission** (§4). The `scope` policy
-  refuses every CR of Q16's kind; it holds for any writer of `vault-config`.
+  refuses every CR of Q16's kind, and the `kinds` policy every other kind and
+  every `spec.connection`: VCO logs in wherever a CR's connection points, with
+  a JWT the `vco-admin` role would accept back. Both hold for any writer of
+  `vault-config`.
+- **No audience on `vco-admin`.** VCO v1.0.3 requests its token with no
+  audience (`api/v1alpha1/utils/commons.go`), so it carries the API server's;
+  an audience on the role could only be that one, and would not stop the
+  replay of a token VCO sent elsewhere. Refusing `spec.connection` does.
 
 ## 7. Lifecycle (ADR-0005)
 
@@ -230,7 +266,7 @@ As in the Enterprise extension, with the mount in the parent's place of the
 | Tenant created | parent renders `<tenant>/kv` | — |
 | Tenant gets its first labelled namespace | child TIs render, the tenant's auth mounts included | — |
 | ServiceAccount annotated | policy, role, ConfigMap, ESO objects | — |
-| Annotation removed, role lowered | policy rewritten or removed, role removed; that role's tokens live to their TTL (≤ 4 h) | secrets stay |
+| Annotation removed, role lowered | policy rewritten or removed, role removed: a token issued before loses the access at once, because Vault reads the policy on every request (the e2e suite asserts it); the token itself lives to its TTL (`token.ttl`, default 1 h) | secrets stay |
 | Namespace deleted or relabelled | VCO re-resolves the role's selector within seconds, to `__no_namespace__`; the re-render removes the role (V10) | secrets stay |
 | Last namespace unlabelled | child TIs go: every grant revoked, the tenant's auth mounts disabled, every token issued through them revoked (A6) | mount and secrets stay |
 | Person leaves a group | nothing | no new SSO login; tokens expire within their TTL |
@@ -254,8 +290,9 @@ deletes one.
 
 ## 8. Health and preflight
 
-Inherited from the Enterprise extension: per-kind `<kind>Succeeded` and
-`<kind>LastError` outputs on the TIs (V5, T1), ESO sync status on the `.eso`
+Inherited from the Enterprise extension: per-kind `<output>Succeeded` and
+`<output>LastError` outputs on the TIs (V5, T1; `<output>` is `engines`,
+`authMounts`, `k8sAuthRoles`, `policies`, … — `charts/README.md` → Health), ESO sync status on the `.eso`
 TI, error ConfigMaps per ServiceAccount, the skipped-tenants ConfigMap. A TI's
 own `Ready` does not reflect VCO: the outputs are the signal.
 
@@ -263,11 +300,11 @@ Added for Community Edition:
 
 | Check | How |
 |---|---|
-| the Vault is Community Edition | documented install check (`vault status` shows no licence); the e2e preflight asks the server and refuses Enterprise, the mirror of the Enterprise suite refusing Community. The charts call no Vault API themselves |
-| the tenant mount exists per tenant | `secretEngineMountSucceeded` on the parent's outputs |
-| VCO's policy is the narrowed one | documented install check; the e2e suite asserts VCO is refused a write to `sys/policy/vco-admin` and a mount of the wrong type |
-| the admission policies are in force | the e2e suite applies one out-of-scope `Policy` CR in `vault-config` and expects the refusal |
-| `default` is unchanged | every tenant token carries root's one `default` policy; the install check and the e2e suite compare it with Vault's built-in text |
+| the Vault is Community Edition | install check in `charts/README.md` (the server version has no `+ent`); the e2e preflight asks the server and refuses Enterprise, the mirror of the Enterprise suite refusing Community. The charts call no Vault API themselves |
+| the tenant mount exists per tenant | `enginesSucceeded` on the parent's outputs |
+| VCO's policy is the narrowed one | install check in `charts/README.md` (a diff with `charts/examples/vco-admin-policy.hcl`); the e2e suite asserts VCO is refused a write to `sys/policy/vco-admin` and a mount of the wrong type |
+| the admission policies are in force | the e2e suite runs the 74 live cases of `hack/lab/admission-cases.sh` against the installed policies, and pins that 3 run offline only; `make verify` runs all 77 offline |
+| `default` is unchanged | every tenant token carries root's one `default` policy; the install check in `charts/README.md` compares it with a fresh Vault's, and the e2e suite proves VCO can't rewrite it |
 
 ## 9. Install requirements
 
@@ -286,9 +323,11 @@ Added for Community Edition:
 - Template Operator v2 ≥ 0.0.5 (C.0: `main` at `0b89c9b`). The extension's
   Templates allow only `vault-config` in `targetNamespaces`.
 - Only Template Operator and Vault admins create VCO CRs in `vault-config`.
-  The admission policies refuse what a tenant Template could make Template
-  Operator write there, but tenants should not hold create on Templates:
-  their Templates run with Template Operator's rights elsewhere too (T2).
+  The admission policies hold for any writer — they refuse what a person, or
+  a tenant Template through Template Operator, could write there — but a
+  writer can still delete the extension's objects, which revokes access (not
+  data). Tenants should not hold create on Templates: their Templates run with
+  Template Operator's rights elsewhere too (T2).
 - Multi-Tenant Operator labelling tenant namespaces `stakater.com/tenant`;
   only the Multi-Tenant Operator and cluster admins may set that label (the
   trust boundary, unchanged). Namespace names are not reserved per tenant

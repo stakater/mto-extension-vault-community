@@ -40,7 +40,7 @@ flowchart LR
     end
     BOOT[[mto-extension-vault-community-bootstrap<br/>Helm, installed once]]
     VCO[vault-config-operator<br/>login role vco-admin, policy bounded by name and type]
-    VAP{{admission policies<br/>origin, scope, cluster}}
+    VAP{{admission policies<br/>kinds, origin, scope, cluster}}
     NS[Tenant namespaces<br/>vault-config-sa ConfigMaps, SecretStores,<br/>ExternalSecrets, Secrets]
     ESO[External Secrets Operator]
     REL[Reloader Enterprise]
@@ -148,7 +148,7 @@ flowchart LR
     R[team-a/kv/data/dev/team-a-api/web/*] --> C{scope check:<br/>under team-a/kv/,<br/>segment closed by /}
     C -->|passes| OK[Policy written by VCO]
     C -->|fails| X[render fails, nothing written]
-    H[a CR written by hand or by a<br/>tenant's Template] --> A{admission:<br/>origin and scope}
+    H[a CR written by hand or by a<br/>tenant's Template] --> A{admission:<br/>kinds, origin and scope}
     A -->|fails| X2[refused at the API server]
   end
 ```

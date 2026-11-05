@@ -292,8 +292,9 @@ func copyOIDCClientSecret(t *testing.T) {
 
 // dexIssuerFromVault fetches Dex's discovery document from inside the Vault
 // pod — where Vault itself fetches it — and returns the issuer it names.
-// dexClient is the Dex client Vault logs in through (hack/lab/dex-config.yaml),
-// also the chart's default sso.oidc.clientId.
+// dexClient is the Dex client Vault logs in through (the static client make
+// lab-dex writes into Secret dex/dex-config), also the chart's default
+// sso.oidc.clientId.
 const dexClient = "vault"
 
 // dexClientRedirects returns the redirect URIs Dex's client allows, from the

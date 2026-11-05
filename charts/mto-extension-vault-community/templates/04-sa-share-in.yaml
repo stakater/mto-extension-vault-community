@@ -39,7 +39,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: Policy
 metadata:
   name: {{ $shareInName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -52,7 +52,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: KubernetesAuthEngineRole
 metadata:
   name: {{ $shareInName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -60,7 +60,7 @@ spec:
   name: {{ $shareInName }}
   path: {{ $k8sMount }}
   targetServiceAccounts:
-    - {{ $saName }}
+    - {{ $saName | quote }}
   {{- include "vault.roleNamespaces" (dict "ns" $saNs "ctx" $) | nindent 2 }}
   policies:
     - {{ $shareInName }}
@@ -72,7 +72,7 @@ apiVersion: external-secrets.io/v1
 kind: SecretStore
 metadata:
   name: {{ $saName }}.share-{{ $peer }}-vault
-  namespace: {{ $saNs }}
+  namespace: {{ $saNs | quote }}
   labels:
     {{- $labels | nindent 4 }}
     vault.stakater.com/app: {{ $f.app | quote }}
@@ -91,7 +91,7 @@ spec:
           mountPath: {{ $k8sMount }}
           role: {{ $shareInName }}
           serviceAccountRef:
-            name: {{ $saName }}
+            name: {{ $saName | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

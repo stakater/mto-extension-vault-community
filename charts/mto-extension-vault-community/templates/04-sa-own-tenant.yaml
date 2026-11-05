@@ -124,7 +124,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: Policy
 metadata:
   name: {{ $roleName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -137,7 +137,7 @@ apiVersion: redhatcop.redhat.io/v1alpha1
 kind: KubernetesAuthEngineRole
 metadata:
   name: {{ $roleName }}
-  namespace: {{ $.Values.configNamespace }}
+  namespace: {{ $.Values.configNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:
@@ -145,7 +145,7 @@ spec:
   name: {{ $roleName }}
   path: {{ $k8sMount }}
   targetServiceAccounts:
-    - {{ $saName }}
+    - {{ $saName | quote }}
   {{- include "vault.roleNamespaces" (dict "ns" $saNs "ctx" $) | nindent 2 }}
   policies:
     - {{ $roleName }}
@@ -155,7 +155,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vault-config-{{ $saName }}
-  namespace: {{ $saNs }}
+  namespace: {{ $saNs | quote }}
   labels:
     {{- $labels | nindent 4 }}
     vault.stakater.com/app: {{ $app | quote }}
@@ -217,7 +217,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vault-ca-bundle
-  namespace: {{ $saNs }}
+  namespace: {{ $saNs | quote }}
   labels:
     {{- $labels | nindent 4 }}
 data:
@@ -231,7 +231,7 @@ apiVersion: external-secrets.io/v1
 kind: SecretStore
 metadata:
   name: {{ $saName }}-vault
-  namespace: {{ $saNs }}
+  namespace: {{ $saNs | quote }}
   labels:
     {{- $labels | nindent 4 }}
     vault.stakater.com/app: {{ $app | quote }}
@@ -250,7 +250,7 @@ spec:
           mountPath: {{ $k8sMount }}
           role: {{ $roleName }}
           serviceAccountRef:
-            name: {{ $saName }}
+            name: {{ $saName | quote }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -270,7 +270,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: vault-apps
-  namespace: {{ $ns }}
+  namespace: {{ $ns | quote }}
   labels:
     {{- $labels | nindent 4 }}
 data:

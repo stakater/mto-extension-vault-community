@@ -23,7 +23,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: mto-extension-vault-community-{{ $tenant }}
-  namespace: {{ .Values.monitoring.prometheusNamespace }}
+  namespace: {{ .Values.monitoring.prometheusNamespace | quote }}
   labels:
     {{- $labels | nindent 4 }}
 spec:

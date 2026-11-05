@@ -48,6 +48,14 @@ const (
 	coreNS  = "e2e-core"
 )
 
+// The cases of hack/lab/admission-cases.sh (CASES in hack/admission-offline.sh)
+// and how many of them run offline only: their old object (a spec out of
+// scope, or no spec) can't be created while admission is on.
+const (
+	admissionCases       = 77
+	admissionOfflineOnly = 3
+)
+
 // e2eTenants are every tenant the suite creates, for the preflight's cleanup.
 var e2eTenants = []string{alpha, beta, prefixT}
 
@@ -723,10 +731,19 @@ func TestE2E(t *testing.T) {
 		const pol, scratch = "e2e-vco-production", "e2e-vco"
 		vaultRoot(t, "write", "sys/policy/"+pol, "policy="+string(raw))
 		t.Cleanup(func() {
-			vaultRun(t, vaultRootToken, "secrets", "disable", kvMount(scratch))
-			vaultRun(t, vaultRootToken, "auth", "disable", k8sAuthMount(scratch))
-			vaultRun(t, vaultRootToken, "delete", "sys/policy/kv."+scratch+".ns.sa")
-			vaultRun(t, vaultRootToken, "delete", "sys/policy/"+pol)
+			// Vault answers success for a mount or policy that is already
+			// gone, so any error here is real: left behind, it would make the
+			// next run's checks pass on this run's state.
+			for _, args := range [][]string{
+				{"secrets", "disable", kvMount(scratch)},
+				{"auth", "disable", k8sAuthMount(scratch)},
+				{"delete", "sys/policy/kv." + scratch + ".ns.sa"},
+				{"delete", "sys/policy/" + pol},
+			} {
+				if _, err := vaultRun(t, vaultRootToken, args...); err != nil {
+					t.Errorf("cleanup: vault %s: %v", strings.Join(args, " "), err)
+				}
+			}
 		})
 		tok := strings.TrimSpace(vaultRoot(t, "token", "create", "-policy="+pol, "-no-default-policy", "-ttl=10m", "-field=token"))
 		inScope := `path "` + kvMount(scratch) + `/data/dev/ns/sa/*" { capabilities = ["read"] }`
@@ -762,20 +779,37 @@ func TestE2E(t *testing.T) {
 	step("admission: out-of-scope VCO CRs are refused at the API server", func(t *testing.T) {
 		// AC-ISO-11. The same cases make admission-test runs: server-side dry
 		// runs in the config namespace, each refusal one field away from an
-		// admitted object.
-		cctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
+		// admitted object. An update case creates its old object for real
+		// (and VCO deletes it in Vault afterwards), so the run is longer than
+		// one command.
+		cctx, cancel := context.WithTimeout(context.Background(), 4*cmdTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(cctx, "bash", "../../hack/lab/admission-cases.sh")
-		cmd.Env = append(os.Environ(), "CONTEXT="+kubeContext, "CONFIG_NS="+configNS, "KUBECTL="+kubectlBin(), "ISSUER="+dexIssuer)
+		// The origin cases write as Template Operator: the identity the
+		// install's templateOperator.* names (the chart's default unless
+		// E2E_TOV2_SA overrides it, helmInstall).
+		tovUser := tov2SA
+		if tovUser == "" {
+			tovUser = "system:serviceaccount:stakater-template-operator:template-operator-template-operator-v2"
+		}
+		cmd.Env = append(os.Environ(), "CONTEXT="+kubeContext, "CONFIG_NS="+configNS, "KUBECTL="+kubectlBin(),
+			"ISSUER="+dexIssuer, "TOV_USER="+tovUser)
 		raw, err := cmd.CombinedOutput()
 		out := string(raw)
 		if err != nil {
 			t.Fatalf("admission cases: %v\n%s", err, out)
 		}
-		if !strings.Contains(out, "== result: 0 failed") {
-			t.Fatalf("admission cases:\n%s", out)
+		// The split is pinned: a case that silently became offline only (or
+		// a live one lost) changes the result line. hack/admission-offline.sh
+		// pins the total.
+		want := fmt.Sprintf("== result: %d cases, 0 failed, %d offline only", admissionCases, admissionOfflineOnly)
+		if !strings.Contains(out, want) || strings.Contains(out, "FAIL ") {
+			t.Fatalf("admission cases: want %q\n%s", want, out)
 		}
-		t.Logf("%d admission cases passed", strings.Count(out, "PASS "))
+		if got := strings.Count(out, "PASS "); got != admissionCases-admissionOfflineOnly {
+			t.Fatalf("admission cases: %d passed live, want %d\n%s", got, admissionCases-admissionOfflineOnly, out)
+		}
+		t.Logf("%d admission cases passed live, %d offline only", admissionCases-admissionOfflineOnly, admissionOfflineOnly)
 	})
 
 	step("admission: a tenant's Template can't make Template Operator write into the config namespace", func(t *testing.T) {
@@ -1127,16 +1161,83 @@ spec:
 		// tenant (K1). e2e-alpha's app in e2e-alpha-reuse logs in (the allow);
 		// then the namespace is deleted and created again, with the same name,
 		// under e2e-beta, with a ServiceAccount of the same name. That
-		// ServiceAccount must not log in to e2e-alpha's role, whether the role
-		// is already gone or VCO still holds it: each role binds the namespace
-		// by name AND tenant label.
+		// ServiceAccount must not log in to e2e-alpha's role WHILE THE ROLE
+		// STILL EXISTS: the chart drops the role once the namespace leaves
+		// e2e-alpha, and a refusal then ("invalid role name") proves only that
+		// it is gone. So the suite writes the same role spec as its own CR,
+		// under its own object name, as a stuck or late re-render would leave
+		// it, and asserts that VCO binds it to no namespace (each role binds the
+		// namespace by name AND tenant label) and that the login gets a 403.
+		// Relabelled for e2e-alpha, the same token logs in to the same role:
+		// the label alone made the difference.
 		appRole := roleName(alpha, reuseNS, "app")
+		roleGVR := vcoGVR("kubernetesauthengineroles")
+		rolePath := "auth/" + k8sAuthMount(alpha) + "/role/" + appRole
 		if _, _, err := vaultTryLogin(t, alpha, appRole, saToken(t, reuseNS, "app")); err != nil {
 			t.Fatalf("e2e-alpha's app could not log in before the namespace moved: %v", err)
 		}
+		rendered := get(t, roleGVR, configNS, appRole)
+		if rendered == nil {
+			t.Fatalf("e2e-alpha's role CR %s is absent before the namespace moved", appRole)
+		}
+		spec, _, _ := unstructured.NestedMap(rendered.Object, "spec")
 		deleteTenantNamespace(t, reuseNS)
+		waitFor(t, "the chart's role CR "+appRole+" gone with the namespace", func() string {
+			if get(t, roleGVR, configNS, appRole) != nil {
+				return "still present"
+			}
+			return ""
+		})
+		const held = "e2e-iso10-held-role"
+		heldRole := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "redhatcop.redhat.io/v1alpha1",
+			"kind":       "KubernetesAuthEngineRole",
+			"metadata":   map[string]any{"name": held, "namespace": configNS},
+			"spec":       spec,
+		}}
+		if _, err := dyn.Resource(roleGVR).Namespace(configNS).Create(ctx, heldRole, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("write e2e-alpha's role spec as the suite's own CR (it passes admission like the chart's): %v", err)
+		}
+		t.Cleanup(func() {
+			deleteIfExists(t, roleGVR, configNS, held)
+			waitFor(t, "the held role CR gone", func() string {
+				if get(t, roleGVR, configNS, held) != nil {
+					return "still present"
+				}
+				return ""
+			})
+		})
 		createTenant(t, beta, reuseNS)
 		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
+		waitVCO(t, "kubernetesauthengineroles", held)
+		// The role is in Vault, and VCO bound it to no namespace: the selector
+		// names the namespace by name AND e2e-alpha's label, and the namespace
+		// of that name is e2e-beta's now.
+		boundTo := func() ([]string, string) {
+			out, err := vaultRun(t, vaultRootToken, "read", "-format=json", rolePath)
+			if err != nil {
+				return nil, "e2e-alpha's role is not in Vault: " + err.Error()
+			}
+			var r struct {
+				Data struct {
+					Namespaces []string `json:"bound_service_account_namespaces"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal([]byte(out), &r); err != nil {
+				return nil, "cannot read the role: " + err.Error()
+			}
+			return r.Data.Namespaces, ""
+		}
+		waitFor(t, "VCO binds e2e-alpha's role to no namespace", func() string {
+			ns, bad := boundTo()
+			if bad != "" {
+				return bad
+			}
+			if slices.Contains(ns, reuseNS) {
+				return fmt.Sprintf("still bound to %v", ns)
+			}
+			return ""
+		})
 		// e2e-beta's own role for the new namespace works, at e2e-beta's mount.
 		waitVCO(t, "kubernetesauthengineroles", roleName(beta, reuseNS, "app"))
 		waitFor(t, "e2e-beta's app logs in at its own mount", func() string {
@@ -1146,21 +1247,50 @@ spec:
 			return ""
 		})
 		jwt := saToken(t, reuseNS, "app")
-		_, _, err := vaultTryLogin(t, alpha, appRole, jwt)
-		if err == nil {
+		if _, _, err := vaultTryLogin(t, alpha, appRole, jwt); err == nil {
 			t.Fatalf("a ServiceAccount in a namespace now owned by e2e-beta logged in to e2e-alpha's role %s", appRole)
+		} else if !refused(err) {
+			t.Fatalf("the login was refused, but not with a 403 — the role must exist and refuse the namespace: %v", err)
 		}
-		if !refused(err) && !strings.Contains(err.Error(), "invalid role name") {
-			t.Errorf("the login was refused for an unexpected reason: %v", err)
-		}
-		// Hold across a drift period: the refusal must last, not be a moment
-		// before VCO re-resolves the selector.
+		// Hold across a drift period: the refusal must last, with the role
+		// still in Vault, not be a moment before VCO re-resolves the selector.
 		holdFor(t, vcoSync+10*time.Second, "e2e-alpha's role stays closed to the reused namespace", func() string {
-			if _, _, err := vaultTryLogin(t, alpha, appRole, jwt); err == nil {
+			if _, bad := boundTo(); bad != "" {
+				return bad
+			}
+			_, _, err := vaultTryLogin(t, alpha, appRole, jwt)
+			switch {
+			case err == nil:
 				return "the login succeeded"
+			case !refused(err):
+				return "refused, but not with a 403: " + err.Error()
 			}
 			return ""
 		})
+		// The matching allow: the namespace labelled for e2e-alpha again, the
+		// same token logs in to the same role. Then back to e2e-beta, which the
+		// lifecycle step below expects.
+		setNamespaceTenant := func(tenant string) {
+			patch := fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`, tenantLabel, tenant)
+			if _, err := kube.CoreV1().Namespaces().Patch(ctx, reuseNS, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+				t.Fatalf("label %s for %s: %v", reuseNS, tenant, err)
+			}
+		}
+		setNamespaceTenant(alpha)
+		waitFor(t, "the same token logs in to e2e-alpha's role once the namespace is e2e-alpha's", func() string {
+			if _, _, err := vaultTryLogin(t, alpha, appRole, jwt); err != nil {
+				return err.Error()
+			}
+			return ""
+		})
+		setNamespaceTenant(beta)
+		waitFor(t, "e2e-alpha's role closed again", func() string {
+			if _, _, err := vaultTryLogin(t, alpha, appRole, jwt); err == nil || !refused(err) {
+				return fmt.Sprintf("login: %v", err)
+			}
+			return ""
+		})
+		waitVCO(t, "kubernetesauthengineroles", roleName(beta, reuseNS, "app"))
 	})
 
 	step("health: a mount collision surfaces on its own tenant only", func(t *testing.T) {

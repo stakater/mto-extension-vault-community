@@ -21,17 +21,20 @@ the only three differences.
 
 C.0, the live-install spike, is done (`docs/spikes/c0-findings.md`). ADRs 0001,
 0003, 0004, 0005, 0007 and 0008 are Accepted; 0007 and 0008 supersede 0002 and
-0006 (share roles on the tenant's own mount). C.1 to C.11 and DX.2 are done
+0006 (share roles on the tenant's own mount). C.1 to C.11, C.17, C.18, C.20 and DX.2 are done
 (`docs/roadmap.md`): both charts, the admission policies, the lab, and an e2e
 suite that proves them on Vault Community 2.1.1 (`make e2e-kind`). `make
 verify` is the gate: markdownlint, relative links, the method checks, chart
-lint, the render tests (`hack/chart-render-tests.sh`) and CRD validation
-against the vendored VCO CRDs. CI runs it on every PR, plus the version-bump,
-ADR-immutability and story-citation checks.
+lint, the render tests (`hack/chart-render-tests.sh`), CRD validation against
+the vendored VCO CRDs, and the admission policies' CEL run offline
+(`make admission-offline`). CI runs it on every PR, plus the mutation run
+(`make mutation-test`: every guard listed in `hack/mutation_tests.py`,
+weakened, must fail the check it names), the version-bump, ADR-immutability
+and story-citation checks. A new guard adds its mutation there.
 
 In a Claude Code session, a PostToolUse hook (`.claude/settings.json`,
 `hack/claude-post-edit.sh`) runs `make method links` after every edit to a
-Markdown file, and shows a failure at once.
+Markdown file of this repository, and shows a failure at once.
 
 ## Invariants — never violate these
 

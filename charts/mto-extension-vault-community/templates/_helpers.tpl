@@ -166,7 +166,7 @@ authentication:
   path: {{ required "vco.authPath must be set" $v.authPath }}
   role: {{ required "vco.role must be set" $v.role }}
   serviceAccount:
-    name: {{ required "vco.serviceAccount must be set" $v.serviceAccount }}
+    name: {{ required "vco.serviceAccount must be set" $v.serviceAccount | quote }}
 {{- end -}}
 
 {{/*
@@ -193,9 +193,13 @@ renders must be:
       share.<t>.….out.<p>     shared/kv/(data|metadata)/<env>/from-<t>/to-<p>/*
       share.<t>.….in.<p>      shared/kv/(data|metadata)/<env>/from-<p>/to-<t>/*, read and list only
   - with no `+`, and `*` only as the last character, after a `/`.
-The tenant segment is always followed by "/", so tenant "team" never matches
-"team-a/". A violation fails the render: it is the chart's own mistake, and
-the admission policies would refuse the object anyway.
+The name has its family's number of parts (kv. 4, share. 6, sso. 3), each a
+DNS label, and its second part is the tenant. The tenant segment is always
+followed by "/", so tenant "team" never matches "team-a/". Every name that
+goes into a regex here is quoted with regexQuoteMeta. A violation fails the
+render: it is the chart's own mistake, and the admission policies would refuse
+the object anyway. Each fail branch has a bad input in the render tests
+(scopebranches).
 Usage: {{ include "vault.assertPolicyScope" (dict "name" $name "policy" $body "ctx" $) }}
 */}}
 {{- define "vault.assertPolicyScope" -}}
@@ -205,22 +209,38 @@ Usage: {{ include "vault.assertPolicyScope" (dict "name" $name "policy" $body "c
 {{- $t := toString .ctx.Values.tenant -}}
 {{- $env := toString .ctx.Values.env -}}
 {{- $shared := toString .ctx.Values.sharedTenant.name -}}
-{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $env) -}}
+{{- $label := "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" -}}
+{{- if not (regexMatch $label $env) -}}
 {{- fail (printf "env %q is not a DNS label: it is a segment of every policy path" $env) -}}
+{{- end -}}
+{{- if not (regexMatch $label $shared) -}}
+{{- fail (printf "sharedTenant.name %q is not a DNS label: it is the first segment of every share path" $shared) -}}
 {{- end -}}
 {{- if or (lt (len $parts) 2) (ne (index $parts 1) $t) -}}
 {{- fail (printf "scope check: policy %q does not belong to tenant %q" $name $t) -}}
 {{- end -}}
+{{- $families := dict "kv" 4 "sso" 3 "share" 6 -}}
+{{- if or (not (hasKey $families $fam)) (ne (len $parts) (int (get $families $fam))) -}}
+{{- fail (printf "scope check: policy %q is in no name family (kv. 4 parts, share. 6, sso. 3)" $name) -}}
+{{- end -}}
+{{- range $p := $parts -}}
+{{- if not (regexMatch $label $p) -}}
+{{- fail (printf "scope check: policy %q has a part %q that is not a DNS label" $name $p) -}}
+{{- end -}}
+{{- end -}}
 {{- $stanza := "^path \"([^\"]+)\" +[{] capabilities = \\[\"[a-z]+\"(, \"[a-z]+\")*\\] [}]$" -}}
 {{- $scope := "" -}}
+{{- $qt := regexQuoteMeta $t -}}
+{{- $qenv := regexQuoteMeta $env -}}
+{{- $qshared := regexQuoteMeta $shared -}}
 {{- if or (eq $fam "kv") (eq $fam "sso") -}}
-{{- $scope = printf "^%s/kv/(data|metadata|delete|undelete|destroy)/%s/([a-z0-9_][-a-z0-9_.]*/)*[*]$" $t $env -}}
-{{- else if and (eq $fam "share") (eq (len $parts) 6) (eq (index $parts 4) "out") -}}
-{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $shared $env $t (index $parts 5) -}}
-{{- else if and (eq $fam "share") (eq (len $parts) 6) (eq (index $parts 4) "in") -}}
-{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $shared $env (index $parts 5) $t -}}
+{{- $scope = printf "^%s/kv/(data|metadata|delete|undelete|destroy)/%s/([a-z0-9_][-a-z0-9_.]*/)*[*]$" $qt $qenv -}}
+{{- else if eq (index $parts 4) "out" -}}
+{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $qshared $qenv $qt (regexQuoteMeta (index $parts 5)) -}}
+{{- else if eq (index $parts 4) "in" -}}
+{{- $scope = printf "^%s/kv/(data|metadata)/%s/from-%s/to-%s/[*]$" $qshared $qenv (regexQuoteMeta (index $parts 5)) $qt -}}
 {{- else -}}
-{{- fail (printf "scope check: policy %q is in no name family (kv. 4 parts, share. 6, sso. 3)" $name) -}}
+{{- fail (printf "scope check: share policy %q is neither .out. nor .in." $name) -}}
 {{- end -}}
 {{- range $raw := splitList "\n" .policy -}}
 {{- $l := trim $raw -}}
@@ -300,6 +320,11 @@ The token fields of a KubernetesAuthEngineRole spec, shared by the own-tenant
 and share roles so they cannot drift.
 */}}
 {{- define "vault.roleTokenFields" -}}
+{{- $ttl := include "vault.tokenSeconds" (dict "name" "token.ttl" "value" .Values.token.ttl) -}}
+{{- $max := include "vault.tokenSeconds" (dict "name" "token.maxTTL" "value" .Values.token.maxTTL) -}}
+{{- if and $ttl $max (gt (int64 $ttl) (int64 $max)) -}}
+{{- fail (printf "token.ttl %s is over token.maxTTL %s: Vault caps a token at maxTTL, so the ttl would never apply" $ttl $max) -}}
+{{- end -}}
 tokenType: {{ include "vault.tokenType" . }}
 {{- with include "vault.tokenSeconds" (dict "name" "token.ttl" "value" .Values.token.ttl) }}
 tokenTTL: {{ . }}
@@ -513,8 +538,8 @@ same namespace, says why.
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .name }}
-  namespace: {{ .ns }}
+  name: {{ .name | quote }}
+  namespace: {{ .ns | quote }}
   labels:
     {{- .labels | nindent 4 }}
 data:
@@ -553,9 +578,18 @@ The tenant's SSO OIDC auth mount, as Vault sees it, without the auth/ prefix:
 {{/*
 Renders the IdP-side group name for a (tenant, role) pair.
 Resolution: tenantRoleMapping[<role>].pattern → tenantGroupTemplate → fail.
+The pattern must hold {tenant} exactly once: without it one group gets the
+role in every tenant (platform-admins as admin of all), which is not a
+tenant's SSO. The bootstrap refuses it at install too, with the check that
+no two roles' patterns can give two tenants the same group.
 */}}
 {{- define "vault.ssoGroup" -}}
 {{- $roleEntry := index .mapping .role -}}
+{{- if hasKey .mapping .role -}}
+{{- if or (not (kindIs "map" $roleEntry)) (not (eq (len (without (keys $roleEntry) "pattern")) 0)) (and (hasKey $roleEntry "pattern") (not $roleEntry.pattern)) -}}
+{{- fail (printf "sso.tenantRoleMapping.%s must be {} (the default pattern) or {pattern: \"<pattern>\"} — got %v; anything else would bind the default group without a word" .role $roleEntry) -}}
+{{- end -}}
+{{- end -}}
 {{- $pattern := "" -}}
 {{- if and $roleEntry (kindIs "map" $roleEntry) $roleEntry.pattern -}}
 {{- $pattern = $roleEntry.pattern -}}
@@ -563,6 +597,9 @@ Resolution: tenantRoleMapping[<role>].pattern → tenantGroupTemplate → fail.
 {{- $pattern = .defaultTemplate -}}
 {{- else -}}
 {{- fail (printf "sso: role %q has no pattern and no sso.tenantGroupTemplate default is set" .role) -}}
+{{- end -}}
+{{- if ne (len (splitList "{tenant}" (toString $pattern))) 2 -}}
+{{- fail (printf "sso: the group pattern %q of role %q must contain {tenant} exactly once: without it one group gets that role in every tenant" $pattern .role) -}}
 {{- end -}}
 {{- $s := $pattern -}}
 {{- $s = replace "{tenant}" .tenant $s -}}

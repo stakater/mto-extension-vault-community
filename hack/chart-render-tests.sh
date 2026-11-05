@@ -13,9 +13,14 @@
 #   - Report line 1 of a failure: infrastructure errors print first.
 #
 # Tenant chart:
-#   golden       — component=all is object-set identical to the committed golden.
+#   golden       — component=all equals the committed golden, object for object
+#                  and field for field.
 #   disjoint     — no object is emitted by both slices (two TIs would fight over it via SSA).
-#   union        — core ∪ eso emits exactly the all set.
+#   union        — core ∪ eso emits exactly the all set, object for object
+#                  (content, not only identities), for every fixture. So every
+#                  content check below, which reads the all render, holds for
+#                  the slices production applies: a path added to one slice
+#                  only fails here.
 #   exclusivity  — external-secrets.io objects appear only in the eso slice.
 #   empty        — the eso slice with no opt-ins renders zero objects.
 #   badvalue     — an unknown component fails the render with the helper's message.
@@ -24,15 +29,34 @@
 #   policyscope  — every Policy of every fixture passes the scope check, read from
 #                  the rendered output: one-line stanzas, no sudo, no +, every path
 #                  inside its tenant's mount (or its share), the tenant segment
-#                  closed by /. A self-test proves the checker flags a bad line,
-#                  and a hostile roleCaps fails the render itself.
+#                  closed by /; on the all render and on each slice. A
+#                  self-test proves the checker flags a bad line, and a hostile
+#                  roleCaps fails the render itself.
+#   scopebranches — every fail branch of vault.assertPolicyScope fails on its
+#                  own bad input (a bare path line for the stanza rule),
+#                  through a probe template that calls the helper directly; a
+#                  good input renders.
+#   quoting      — a ServiceAccount named true in a namespace named 123, with a
+#                  share each way, renders every name, namespace,
+#                  ServiceAccount and label value as a string.
+#   ssogroups    — the SSO values that would break every tenant, or bind one
+#                  group too widely, fail: a pattern without {tenant} (also
+#                  with one role, where no other rule can refuse it), patterns
+#                  that give two tenants (or one tenant's two roles) one group,
+#                  in each branch of ssoCollision and in both role orders, a
+#                  mapping that is not a map, fallback other than deny, a role
+#                  named fallback (with caps), listed twice or without caps,
+#                  caps with sudo or of another shape, an empty template, a
+#                  double quote, a newline or a tab; the tenant chart refuses
+#                  its share of them; the defaults and the near misses render.
 #   rolebind     — every workload role binds exactly its own policy, its tenant's
 #                  mount, its own ServiceAccount, and a selector of exactly its
 #                  namespace name and the tenant label: a namespace name reused by
 #                  another tenant gets nothing.
 #   mountagree   — the auth mount path agrees across the AuthEngineMount, its
-#                  config, every role, the SecretStores and VAULT_K8S_MOUNT;
-#                  VAULT_NAMESPACE is empty.
+#                  config, every role, the SecretStores and VAULT_K8S_MOUNT,
+#                  also with a / around every mount path and name (the
+#                  admission policies expect none); VAULT_NAMESPACE is empty.
 #   storepath    — every SecretStore reads the tenant's mount <tenant>/kv, KV v2,
 #                  with no Vault namespace; every ExternalSecret key is relative
 #                  to that mount; with ESO off install-wide, a Deployment asking
@@ -74,7 +98,7 @@
 #   emission     — the parent emits one TI per enabled slice per tenant with a
 #                  labelled namespace, none for a tenant without one, and a roster
 #                  of exactly the rendered tenants.
-#   reserved     — a tenant name that is not a DNS label, over 63 chars, the
+#   reserved     — a tenant name that is not a DNS label, over 29 chars, the
 #                  shared name, or the first segment of a path Vault or the
 #                  platform uses (sys, auth, token, VCO's login mount,
 #                  agent-registry, parent.reservedPaths) is skipped and listed in
@@ -96,7 +120,28 @@
 #   nullfields   — no rendered field is YAML null, in the bootstrap, the parent,
 #                  or the tenant chart with no workloads.
 #   parentplumb  — install-wide knobs reach the child valuesTemplate; an unset
-#                  token block is omitted, not empty.
+#                  token block is omitted, not empty; a ttl of 0 stays 0.
+#   installvalues — every value installChecks reads fails when empty or
+#                  malformed, through the helpers with the schema removed (and
+#                  through the schema where it has a pattern); a reserved shared
+#                  name, an empty SSO mount path, ttl over maxTTL (also with
+#                  one side set, against the tenant chart's default), the
+#                  Kubernetes and SSO mounts on one path or one inside the
+#                  other, and a quote in vco.role fail; the schema refuses a
+#                  tenantValues value of a type the tenant chart can't read;
+#                  kubernetes_prod as a mount path and the near misses render.
+#   schemakeys   — at every object the bootstrap schema closes
+#                  (additionalProperties: false), found by walking the schema,
+#                  a misspelt key fails; the walk finds exactly the pinned
+#                  list of objects; the required objects can't be nulled.
+#   tenantvaluekeys — the bootstrap schema's tenantValues keys (top level, sso,
+#                  sso.oidc, sso.mount, monitoring) are the tenant chart's
+#                  values.yaml keys, plus the removed ones whose guards name the
+#                  fix; the bootstrap's default SSO roles are the tenant chart's
+#                  sso.roles and roleCaps keys, and its default token ttl and
+#                  maxTTL the tenant chart's.
+#   dnsregex     — every regex in the charts is one of the known forms: a
+#                  DNS-label copy loosened or spelt another way fails.
 #   versionpin   — the bootstrap's tenantChart.version equals the tenant chart
 #                  version.
 #   outputnames  — output and field names are unique within every Template.
@@ -120,20 +165,26 @@
 #                  Unset, VCO's finalizer update sends "" and its CRD enum refuses
 #                  it: the CR gets no finalizer, and deleting it never deletes the
 #                  mount in Vault.
-#   admission    — the bootstrap renders the three admission policies and their
+#   admission    — the bootstrap renders the four admission policies and their
 #                  bindings, with the install's values in their CEL: Template
 #                  Operator's ServiceAccount, the config namespace, the tenant
-#                  label, the API host, the issuer, the group pattern and the
-#                  reserved names; admission.enabled=false renders none, and a
-#                  near-miss value fails.
+#                  label, the API host, the issuer, the group pattern, the
+#                  reserved names and VCO's login; the kinds and origin policies
+#                  match every namespaced kind; admission.enabled=false renders
+#                  none, and a near-miss value fails. What the CEL decides is
+#                  `make admission-offline`.
 #   vcopolicy    — charts/examples/vco-admin-policy.hcl (production) and the lab
-#                  policy differ only by delete on the kv mounts; neither grants
-#                  a wildcard over sys/policy, sys/mounts, sys/auth or auth, nor
-#                  VCO's own login mount or policy; every mount pins its type.
+#                  policy differ only by delete on the kv mounts; each grants
+#                  exactly the extension's paths, so no other path — a
+#                  sys/policies/acl/* or a + form that reaches vco-admin, a
+#                  wildcard over sys/policy, sys/mounts, sys/auth or auth, VCO's
+#                  own login mount — can pass; every mount pins its type.
 #   release      — hack/release-chart.sh, against a stub helm: a published
-#                  version is skipped (no push), an explicit not-found is
-#                  pushed, anything else fails without pushing.
-#   bumpcheck    — hack/version-bump-check.sh in a scratch git repo.
+#                  version with the same content is skipped (no push), one with
+#                  other content fails, an explicit not-found is pushed,
+#                  anything else fails without pushing.
+#   bumpcheck    — hack/version-bump-check.sh in a scratch git repo: a trailing
+#                  slash, an absolute path and a missing directory included.
 #   fullnames    — kubectl commands in the docs, the Makefile and the scripts
 #                  name TemplateInstances and Templates by their full resource
 #                  name. On OpenShift the short names are OpenShift's own kinds.
@@ -229,11 +280,24 @@ diff -u "$WORK/golden.yaml" "$WORK/all.yaml" > "$WORK/golden.diff" \
 overlap="$(comm -12 "$WORK/core.ids" "$WORK/eso.ids")"
 [ -z "$overlap" ] && check disjoint 0 || check disjoint 1 "emitted by both slices: $overlap"
 
-# union
+# union — identities, then content, for every fixture
+un_ok=0; un_detail=""
 sort "$WORK/core.ids" "$WORK/eso.ids" > "$WORK/union.ids"
 diff "$WORK/union.ids" "$WORK/all.ids" > /dev/null \
-  && check union 0 \
-  || check union 1 "core ∪ eso ≠ all: $(diff "$WORK/union.ids" "$WORK/all.ids" | head -4 | tr '\n' ' ')"
+  || { un_ok=1; un_detail="$un_detail [core ∪ eso ≠ all: $(diff "$WORK/union.ids" "$WORK/all.ids" | head -4 | tr '\n' ' ')]"; }
+for fx in full guards no-optins no-workloads; do
+  for c in core eso; do
+    render "$c" "$FIXTURES/values-$fx.yaml" > "$WORK/un-$c.raw" 2>"$WORK/un.err" \
+      || { echo "FAIL  setup — values-$fx component=$c did not render: $(first "$WORK/un.err")"; exit 1; }
+  done
+  [ "$fx" = full ] && f_all="$WORK/all.raw" || f_all="$WORK/fx-$fx.raw"
+  cat "$WORK/un-core.raw" "$WORK/un-eso.raw" | normalize > "$WORK/un-slices.yaml"
+  normalize < "$f_all" > "$WORK/un-all.yaml"
+  diff -u "$WORK/un-all.yaml" "$WORK/un-slices.yaml" > "$WORK/un.diff" \
+    || { un_ok=1; un_detail="$un_detail [values-$fx: the slices' objects differ from the all render's: $(grep -E '^[-+][^-+]' "$WORK/un.diff" | head -4 | tr '\n' '|' || true)]"; }
+done
+[ -s "$WORK/all.raw" ] || { un_ok=1; un_detail="$un_detail [no all render — the check proves nothing]"; }
+check union "$un_ok" "$un_detail"
 
 # exclusivity
 ex_ok=0; ex_detail=""
@@ -333,12 +397,14 @@ for want in 'team-a/kv/data/dev/ns/sa/\* is outside' 'team\* is outside' '\+ in 
   grep -qE "$want" <<<"$self" || { ps_ok=1; ps_detail="$ps_detail [self-test: no violation matching '$want' in: $(tr '\n' '|' <<<"$self")]"; }
 done
 grep -q 'team/kv/data/dev/ns/sa/\* is outside' <<<"$self" && { ps_ok=1; ps_detail="$ps_detail [self-test: a good line was flagged]"; }
-for f in all.raw fx-guards.raw fx-no-optins.raw fx-no-workloads.raw; do
+for f in all.raw core.raw eso.raw fx-guards.raw fx-no-optins.raw fx-no-workloads.raw; do
   v="$(scope_violations "$WORK/$f" dev)"
   [ -z "$v" ] || { ps_ok=1; ps_detail="$ps_detail [$f: $(tr '\n' '|' <<<"$v")]"; }
 done
 yqs npol 'select(.kind == "Policy") | .metadata.name' "$WORK/all.raw"
 [ "$(lines "$npol")" -ge 4 ] || { ps_ok=1; ps_detail="$ps_detail [values-full rendered $(lines "$npol") policies — the check proves nothing]"; }
+yqs ncore 'select(.kind == "Policy") | .metadata.name' "$WORK/core.raw"
+[ "$(lines "$ncore")" = "$(lines "$npol")" ] || { ps_ok=1; ps_detail="$ps_detail [the core slice rendered $(lines "$ncore") policies, all $(lines "$npol")]"; }
 # The render-time guard: a role capability list with sudo, and an env that
 # would put a wildcard into the path, fail the render itself.
 printf 'roleCaps:\n  editor: %s\n' "'[\"read\", \"sudo\"]'" > "$WORK/ps-sudo.yaml"
@@ -350,6 +416,72 @@ for c in "-f $WORK/ps-sudo.yaml:grants sudo" "--set env=dev/*:is not a DNS label
   fi
 done
 check policyscope "$ps_ok" "$ps_detail"
+
+# scopebranches — a probe template calls vault.assertPolicyScope directly, so
+# each fail branch gets a bad input the chart itself never renders.
+sb2_ok=0; sb2_detail=""
+cp -R "$CHART" "$WORK/probe"
+printf '{{- with .Values.probe }}{{ include "vault.assertPolicyScope" (dict "name" .name "policy" .policy "ctx" $) }}{{ end }}\n' > "$WORK/probe/templates/zz-probe.yaml"
+probe() { # probe <label> <name> <policy> <expect: ok | message> [extra helm args]
+  local label="$1" name="$2" body="$3" want="$4"; shift 4
+  printf 'probe:\n  name: %s\n  policy: |\n%s\n' "$name" "$(sed 's/^/    /' <<<"$body")" > "$WORK/probe.yaml"
+  if "$HELM" template x "$WORK/probe" -n "$NS" --set tenant=t --set env=dev -f "$WORK/probe.yaml" "$@" > /dev/null 2>"$WORK/probe.err"; then
+    [ "$want" = ok ] || { sb2_ok=1; sb2_detail="$sb2_detail [$label rendered, want '$want']"; }
+  else
+    if [ "$want" = ok ]; then
+      sb2_ok=1; sb2_detail="$sb2_detail [$label failed, want ok: $(first "$WORK/probe.err")]"
+    else
+      grep -qF -- "$want" "$WORK/probe.err" || { sb2_ok=1; sb2_detail="$sb2_detail [$label failed elsewhere: $(first "$WORK/probe.err")]"; }
+    fi
+  fi
+}
+good='path "t/kv/data/dev/ns/sa/*" { capabilities = ["read"] }'
+probe good          kv.t.ns.sa           "$good" ok
+probe sso-root      sso.t.admin          'path "t/kv/metadata" { capabilities = ["list"] }' ok
+probe share-in-read share.t.ns.sa.in.p   'path "shared/kv/data/dev/from-p/to-t/*" { capabilities = ["read", "list"] }' ok
+probe env           kv.t.ns.sa           "$good" 'is not a DNS label: it is a segment of every policy path' --set 'env=dev/*'
+probe shared        kv.t.ns.sa           "$good" 'sharedTenant.name "sh.red" is not a DNS label' --set sharedTenant.name=sh.red
+probe tenant        kv.other.ns.sa       "$good" 'does not belong to tenant'
+probe kv-parts      kv.t.ns.sa.extra     "$good" 'is in no name family'
+probe sso-parts     sso.t.admin.extra    "$good" 'is in no name family'
+probe share-parts   share.t.ns.sa.out    "$good" 'is in no name family'
+probe family        vault.t.ns.sa        "$good" 'is in no name family'
+probe part          kv.t.NS.sa           "$good" 'that is not a DNS label'
+probe share-dir     share.t.ns.sa.both.p "$good" 'is neither .out. nor .in.'
+probe stanza        kv.t.ns.sa           'path "t/kv/data/dev/ns/sa/*" {' 'not a one-line path stanza'
+# A bare path in scope: only the stanza rule refuses it (the path rule reads
+# the whole line as the path when the line is not a stanza).
+probe stanza-bare   kv.t.ns.sa           't/kv/data/dev/ns/sa/*' 'not a one-line path stanza'
+probe sudo          kv.t.ns.sa           'path "t/kv/data/dev/ns/sa/*" { capabilities = ["read", "sudo"] }' 'grants sudo'
+probe outside       kv.t.ns.sa           'path "t/kv/config" { capabilities = ["update"] }' 'outside its scope'
+probe prefix        kv.t.ns.sa           'path "t-a/kv/data/dev/ns/sa/*" { capabilities = ["read"] }' 'outside its scope'
+probe share-way     share.t.ns.sa.out.p  'path "shared/kv/data/dev/from-p/to-t/*" { capabilities = ["read"] }' 'outside its scope'
+probe import-write  share.t.ns.sa.in.p   'path "shared/kv/data/dev/from-p/to-t/*" { capabilities = ["read", "create"] }' 'writes'
+check scopebranches "$sb2_ok" "$sb2_detail"
+
+# quoting — names YAML would read as a bool or a number. A role named
+# kv.t.123.true is fine; namespace: 123 or - true is an int and a bool, and
+# the admission of the whole tenant's apply fails on them.
+qt_ok=0; qt_detail=""
+cat > "$WORK/qt.yaml" <<'YAML'
+tenant: t
+serviceAccounts:
+  - metadata: {name: "true", namespace: "123", annotations: {vault.stakater.com/kv: "true", vault.stakater.com/role: editor, vault.stakater.com/kv-export-tenant: "456", vault.stakater.com/kv-import-tenant: "456"}}
+knownTenants: "t,456"
+deployments:
+  - metadata: {name: "456", namespace: "123", annotations: {vault.stakater.com/kv-secret.null: "db#password"}}
+    spec: {template: {spec: {serviceAccountName: "true"}}}
+YAML
+render all "$WORK/qt.yaml" > "$WORK/qt.out" 2>"$WORK/qt.err" || { qt_ok=1; qt_detail="$qt_detail [the fixture did not render: $(first "$WORK/qt.err")]"; }
+yqs qtnon '(.metadata.name | select(tag != "!!str")), (.metadata.namespace | select(. != null and tag != "!!str")), (.spec.targetServiceAccounts[]? | select(tag != "!!str")), (.. | select(has("serviceAccountRef")) | .serviceAccountRef.name | select(tag != "!!str")), (.. | select(has("matchLabels")) | .matchLabels[] | select(tag != "!!str")), (.metadata.labels[]? | select(tag != "!!str"))' "$WORK/qt.out"
+[ -z "$qtnon" ] || { qt_ok=1; qt_detail="$qt_detail [non-string names: $(tr '\n' ' ' <<<"$qtnon")]"; }
+yqs qtkinds 'select(.metadata.namespace == "123") | .kind' "$WORK/qt.out"
+for k in ConfigMap SecretStore ExternalSecret; do
+  grep -qx "$k" <<<"$qtkinds" || { qt_ok=1; qt_detail="$qt_detail [no $k in namespace 123 — the check proves nothing]"; }
+done
+yqs qtshare 'select(.kind == "KubernetesAuthEngineRole" and (.metadata.name | test("^share[.]"))) | .metadata.name' "$WORK/qt.out"
+[ "$(lines "$qtshare")" = 2 ] || { qt_ok=1; qt_detail="$qt_detail [want 2 share roles for ServiceAccount true, got: $(tr '\n' ' ' <<<"$qtshare")]"; }
+check quoting "$qt_ok" "$qt_detail"
 
 # rolebind
 rb_ok=0; rb_detail=""
@@ -367,26 +499,33 @@ done
 [ -z "$rb_detail" ] || rb_ok=1
 check rolebind "$rb_ok" "$rb_detail"
 
-# mountagree
+# mountagree — on the full render, and on one with a / around every mount
+# path and name: the install check trims it, and the admission policies
+# expect every object without it.
 ma_ok=0; ma_detail=""
-yqs m_auth 'select(.kind == "AuthEngineMount" and .spec.type == "kubernetes") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
-yqs m_cfg 'select(.kind == "KubernetesAuthEngineConfig") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
-yqs m_roles 'select(.kind == "KubernetesAuthEngineRole") | .spec.path' "$WORK/all.raw"
-yqs m_cms 'select(.kind == "ConfigMap" and (.data | has("VAULT_K8S_MOUNT"))) | .data.VAULT_K8S_MOUNT' "$WORK/all.raw"
-yqs m_stores 'select(.kind == "SecretStore") | .spec.provider.vault.auth.kubernetes.mountPath' "$WORK/all.raw"
-for pair in "AuthEngineMount:$m_auth" "KubernetesAuthEngineConfig:$m_cfg" "roles:$(sort -u <<<"$m_roles")" "SecretStores:$(sort -u <<<"$m_stores")" "VAULT_K8S_MOUNT:$(sort -u <<<"$m_cms")"; do
-  [ "${pair#*:}" = team-a/kubernetes/workloads ] || { ma_ok=1; ma_detail="$ma_detail [${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
+render all "$FIXTURES/values-full.yaml" --set kubernetesAuth.path=/kubernetes/ --set kubernetesAuth.name=workloads/ \
+  --set sso.mount.path=oidc/ --set sso.mount.name=/sso/ > "$WORK/ma-slash.raw" 2>"$WORK/ma.err" \
+  || { ma_ok=1; ma_detail="$ma_detail [the render with slashes failed: $(first "$WORK/ma.err")]"; }
+for f in all.raw ma-slash.raw; do
+  yqs m_auth 'select(.kind == "AuthEngineMount" and .spec.type == "kubernetes") | .spec.path + "/" + .spec.name' "$WORK/$f"
+  yqs m_cfg 'select(.kind == "KubernetesAuthEngineConfig") | .spec.path + "/" + .spec.name' "$WORK/$f"
+  yqs m_roles 'select(.kind == "KubernetesAuthEngineRole") | .spec.path' "$WORK/$f"
+  yqs m_cms 'select(.kind == "ConfigMap" and (.data | has("VAULT_K8S_MOUNT"))) | .data.VAULT_K8S_MOUNT' "$WORK/$f"
+  yqs m_stores 'select(.kind == "SecretStore") | .spec.provider.vault.auth.kubernetes.mountPath' "$WORK/$f"
+  for pair in "AuthEngineMount:$m_auth" "KubernetesAuthEngineConfig:$m_cfg" "roles:$(sort -u <<<"$m_roles")" "SecretStores:$(sort -u <<<"$m_stores")" "VAULT_K8S_MOUNT:$(sort -u <<<"$m_cms")"; do
+    [ "${pair#*:}" = team-a/kubernetes/workloads ] || { ma_ok=1; ma_detail="$ma_detail [$f ${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
+  done
+  yqs m_sso 'select(.kind == "AuthEngineMount" and .spec.type == "oidc") | .spec.path + "/" + .spec.name' "$WORK/$f"
+  yqs m_ssocfg 'select(.kind == "JWTOIDCAuthEngineConfig") | .spec.path' "$WORK/$f"
+  yqs m_ssoroles 'select(.kind == "JWTOIDCAuthEngineRole") | .spec.path' "$WORK/$f"
+  for pair in "oidc AuthEngineMount:$m_sso" "JWTOIDCAuthEngineConfig:$m_ssocfg" "oidc roles:$(sort -u <<<"$m_ssoroles")"; do
+    [ "${pair#*:}" = team-a/oidc/sso ] || { ma_ok=1; ma_detail="$ma_detail [$f ${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
+  done
 done
 yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-")) and (.data | has("VAULT_K8S_MOUNT"))) | .metadata.name + "=" + (.data.VAULT_NAMESPACE | tostring)' "$WORK/all.raw"
 [ -n "$vns" ] || { ma_ok=1; ma_detail="$ma_detail [no vault-config ConfigMap — the check proves nothing]"; }
 bad="$(grep -v '=$' <<<"$vns" || true)"
 [ -z "$bad" ] || { ma_ok=1; ma_detail="$ma_detail [VAULT_NAMESPACE not empty: $(tr '\n' ' ' <<<"$bad")]"; }
-yqs m_sso 'select(.kind == "AuthEngineMount" and .spec.type == "oidc") | .spec.path + "/" + .spec.name' "$WORK/all.raw"
-yqs m_ssocfg 'select(.kind == "JWTOIDCAuthEngineConfig") | .spec.path' "$WORK/all.raw"
-yqs m_ssoroles 'select(.kind == "JWTOIDCAuthEngineRole") | .spec.path' "$WORK/all.raw"
-for pair in "oidc AuthEngineMount:$m_sso" "JWTOIDCAuthEngineConfig:$m_ssocfg" "oidc roles:$(sort -u <<<"$m_ssoroles")"; do
-  [ "${pair#*:}" = team-a/oidc/sso ] || { ma_ok=1; ma_detail="$ma_detail [${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
-done
 check mountagree "$ma_ok" "$ma_detail"
 
 # storepath
@@ -426,7 +565,8 @@ path "shared/kv/metadata/dev/from-team-b/to-team-a/*" { capabilities = ["read", 
 [ "$in_pol" = "$want_in" ] || { sh_ok=1; sh_detail="$sh_detail [import policy: $(tr '\n' '|' <<<"$in_pol")]"; }
 yqs shroles 'select(.kind == "KubernetesAuthEngineRole" and (.metadata.name | test("^share[.]"))) | .metadata.name + " " + .spec.path' "$WORK/all.raw"
 [ "$(lines "$shroles")" = 2 ] || { sh_ok=1; sh_detail="$sh_detail [want 2 share roles, got: $(tr '\n' '|' <<<"$shroles")]"; }
-grep -v ' team-a/kubernetes/workloads$' <<<"$shroles" | grep -q . && { sh_ok=1; sh_detail="$sh_detail [a share role is not on the tenant's own mount: $(tr '\n' '|' <<<"$shroles")]"; }
+elsewhere="$(grep -v ' team-a/kubernetes/workloads$' <<<"$shroles" || true)"
+[ -z "$elsewhere" ] || { sh_ok=1; sh_detail="$sh_detail [a share role is not on the tenant's own mount: $(tr '\n' '|' <<<"$elsewhere")]"; }
 yqs shns 'select(.kind == "ConfigMap" and .metadata.name == "vault-config-app-a") | .data | to_entries | .[] | select(.key | test("^VAULT_(OUT|IN)_.*_NAMESPACE$")) | .key + "=" + .value' "$WORK/all.raw"
 [ "$(sort <<<"$shns" | tr '\n' ' ')" = "VAULT_IN_TEAM_B_NAMESPACE= VAULT_OUT_TEAM_B_NAMESPACE= " ] || { sh_ok=1; sh_detail="$sh_detail [share namespaces in the ConfigMap: '$(tr '\n' ' ' <<<"$shns")']"; }
 # An off-roster peer renders nothing; the share self-heals when it appears.
@@ -660,6 +800,74 @@ done
 [ -z "$sb_detail" ] || sb_ok=1
 check ssobind "$sb_ok" "$sb_detail"
 
+# ssogroups — the bootstrap at install, the tenant chart at render.
+sg_ok=0; sg_detail=""
+sg_tenant() { # sg_tenant <label> <values YAML> <expect: ok | message>
+  printf '%s\n' "$2" > "$WORK/sg-tenant.yaml"
+  if render core "$FIXTURES/values-full.yaml" -f "$WORK/sg-tenant.yaml" > /dev/null 2>"$WORK/sg.err"; then
+    [ "$3" = ok ] || { sg_ok=1; sg_detail="$sg_detail [tenant chart $1 rendered, want '$3']"; }
+  elif [ "$3" = ok ]; then
+    sg_ok=1; sg_detail="$sg_detail [tenant chart $1 failed: $(first "$WORK/sg.err")]"
+  else
+    grep -qF -- "$3" "$WORK/sg.err" || { sg_ok=1; sg_detail="$sg_detail [tenant chart $1 failed elsewhere: $(first "$WORK/sg.err")]"; }
+  fi
+}
+sg_tenant platform 'sso: {tenantRoleMapping: {admin: {pattern: platform-admins}}}' 'must contain {tenant} exactly once'
+sg_tenant string-map 'sso: {tenantRoleMapping: {admin: "ops-{tenant}-admins"}}' 'must be {} (the default pattern) or {pattern:'
+sg_tenant one-group 'sso: {tenantGroupTemplate: "{tenant}"}' 'bind the same group'
+sg_tenant ttl 'token: {ttl: 7200, maxTTL: 3600}' 'is over token.maxTTL'
+sg_tenant mapped 'sso: {tenantRoleMapping: {admin: {pattern: "ops-{tenant}"}}}' ok
+sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message> [chart dir]
+  printf 'tenantValues: %s\n' "$2" > "$WORK/sg-boot.yaml"
+  if "$HELM" template b "${4:-$BOOTSTRAP}" -n "$NS" -f "$WORK/sg-boot.yaml" > /dev/null 2>"$WORK/sg.err"; then
+    [ "$3" = ok ] || { sg_ok=1; sg_detail="$sg_detail [bootstrap $1 rendered, want '$3']"; }
+  elif [ "$3" = ok ]; then
+    sg_ok=1; sg_detail="$sg_detail [bootstrap $1 failed: $(first "$WORK/sg.err")]"
+  else
+    grep -qF -- "$3" "$WORK/sg.err" || { sg_ok=1; sg_detail="$sg_detail [bootstrap $1 failed elsewhere: $(first "$WORK/sg.err")]"; }
+  fi
+}
+rc='roleCaps: {read: "[\"read\"]", a: "[\"read\"]", b: "[\"read\"]"}'
+sg_boot default '{}' ok
+sg_boot dotted "{$rc, sso: {roles: [read, audit-read], tenantGroupTemplate: \"{tenant}.{role}\"}}" ok
+sg_boot prefixes '{sso: {tenantGroupTemplate: "grp-{tenant}-{role}", tenantRoleMapping: {admin: {pattern: "ops-{tenant}"}}}}' ok
+sg_boot empty-entry '{sso: {tenantRoleMapping: {admin: {}, fallback: deny}}}' ok
+sg_boot no-overlap "{$rc, sso: {roles: [a, b], tenantRoleMapping: {a: {pattern: \"{tenant}_x-s\"}, b: {pattern: \"h_{tenant}_y\"}}}}" ok
+sg_boot platform '{sso: {tenantRoleMapping: {admin: {pattern: platform-admins}}}}' 'must contain {tenant} exactly once'
+sg_boot twice '{sso: {tenantGroupTemplate: "{tenant}-{tenant}-{role}"}}' 'must contain {tenant} exactly once'
+# One role: no pair for the collision check, so only the {tenant} rule
+# refuses these.
+sg_boot platform-one '{sso: {roles: [admin], tenantRoleMapping: {admin: {pattern: platform-admins}}}}' 'must contain {tenant} exactly once'
+sg_boot twice-one '{sso: {roles: [admin], tenantGroupTemplate: "{tenant}-{tenant}-{role}"}}' 'must contain {tenant} exactly once'
+# A newline folds to a space in the admission policies' YAML: the CEL would
+# expect another group than the tenant chart binds.
+sg_boot newline '{sso: {tenantRoleMapping: {admin: {pattern: "{tenant}-\nadmins"}}}}' 'holds a control character'
+sg_boot tab '{sso: {tenantRoleMapping: {admin: {pattern: "{tenant}-\tadmins"}}}}' 'holds a control character'
+# ssoCollision: S2 = E S1 (read before audit-read), S1 = E S2 (audit-read
+# first), a longer prefix, the overlap across two tenants, the overlap within
+# one, and one pattern for every role.
+sg_boot suffix-1 "{$rc, sso: {roles: [read, audit-read]}}" 'can give two tenants the same group, for example x-audit-reads'
+sg_boot suffix-2 "{$rc, sso: {roles: [audit-read, read]}}" 'can give two tenants the same group, for example x-audit-reads'
+sg_boot prefix '{sso: {tenantRoleMapping: {admin: {pattern: "ops-{tenant}"}}}}' 'can give two tenants the same group, for example ops-x-editors'
+sg_boot overlap "{$rc, sso: {roles: [a, b], tenantRoleMapping: {a: {pattern: \"{tenant}_x-s\"}, b: {pattern: \"h_{tenant}-s\"}}}}" 'can give two tenants the same group, for example h_x-s'
+sg_boot overlap-one "{$rc, sso: {roles: [a, b], tenantRoleMapping: {a: {pattern: \"{tenant}_a-s\"}, b: {pattern: \"a_{tenant}-s\"}}}}" 'give one tenant the same group for both roles, for example a_a-s'
+sg_boot one-group '{sso: {tenantGroupTemplate: "{tenant}"}}' 'give one tenant the same group for both roles'
+sg_boot string-map '{sso: {tenantRoleMapping: {admin: "ops-{tenant}-admins"}}}' 'must be {} (the default pattern) or {pattern:'
+sg_boot empty-pattern '{sso: {tenantRoleMapping: {admin: {pattern: ""}}}}' 'must be {} (the default pattern) or {pattern:'
+sg_boot misspelt-entry '{sso: {tenantRoleMapping: {admin: {patern: "x-{tenant}"}}}}' 'must be {} (the default pattern) or {pattern:'
+sg_boot unknown-role '{sso: {tenantRoleMapping: {ops: {pattern: "ops-{tenant}"}}}}' 'maps a role that is not in sso.roles'
+sg_boot fallback-allow '{sso: {tenantRoleMapping: {fallback: allow}}}' 'It must be "deny"'
+sg_boot role-fallback '{roleCaps: {fallback: "[\"read\"]"}, sso: {roles: [admin, fallback]}}' 'entry "fallback" is reserved'
+sg_boot role-twice '{sso: {roles: [admin, admin]}}' 'lists "admin" twice' "$WORK/noschema/boot"
+sg_boot role-twice-schema '{sso: {roles: [admin, admin]}}' 'array items[0,1] must be unique'
+sg_boot role-no-caps '{sso: {roles: [admin, ops]}}' 'has no roleCaps entry'
+sg_boot caps-sudo '{roleCaps: {admin: "[\"read\", \"sudo\"]"}}' 'grants sudo'
+sg_boot caps-shape '{roleCaps: {admin: "read, list"}}' 'is not one capability list'
+sg_boot empty-template '{sso: {tenantGroupTemplate: ""}}' 'is set but empty'
+sg_boot dquote '{sso: {tenantGroupTemplate: "{tenant}-\"{role}"}}' 'contains a quote, a double quote or a backslash'
+sg_boot badrole '{sso: {roles: [Admin]}}' 'is not a DNS label'
+check ssogroups "$sg_ok" "$sg_detail"
+
 # falsestring — schema kept on: it accepts "false", which is the point
 fs_ok=0; fs_detail=""
 render all "$FIXTURES/values-full.yaml" --set-string sso.enabled=false --set-string monitoring.enabled=false > "$WORK/fs-false.yaml" 2>"$WORK/fs.err" || { fs_ok=1; fs_detail="$fs_detail [\"false\" did not render: $(first "$WORK/fs.err")]"; }
@@ -731,7 +939,8 @@ parameters:
     - metadata: { name: "1234" }
     # skipped and reported: the shared name, Vault's own paths, VCO's login
     # mount, a platform mount from parent.reservedPaths, not a DNS label, and
-    # a DNS label of 64 characters (over the 63-char label value cap)
+    # a DNS label of 64 characters, and one of 30 (over the 29-char budget of
+    # the child TI name mto-extension-vault-community-<tenant>.eso)
     - metadata: { name: shared }
     - metadata: { name: sys }
     - metadata: { name: auth }
@@ -743,6 +952,9 @@ parameters:
     - metadata: { name: secret }
     - metadata: { name: has.dot }
     - metadata: { name: tenant-name-of-sixty-four-characters-which-is-one-over-the-cap-x }
+    - metadata: { name: tenant-name-of-thirty-chars-xy }
+    # 29 characters: the longest name that renders
+    - metadata: { name: tenant-name-of-twenty-nine-xy }
   # The gate counts namespaces carrying tenantLabelKey. The unlabelled and
   # foreign-labelled entries prove the filter is not counting the whole list.
   tenantNamespaces:
@@ -781,10 +993,14 @@ check emission "$em_ok" "$em_detail"
 # reserved
 rs_ok=0; rs_detail=""
 yqs skipped "select(.kind == \"ConfigMap\" and .metadata.name == \"$P-skipped-tenants\") | .data | keys | .[]" "$WORK/emit-enabled.yaml"
-want_skipped="agent-registry auth cubbyhole has.dot identity kubernetes secret shared sys tenant-name-of-sixty-four-characters-which-is-one-over-the-cap-x token "
+want_skipped="agent-registry auth cubbyhole has.dot identity kubernetes secret shared sys tenant-name-of-sixty-four-characters-which-is-one-over-the-cap-x tenant-name-of-thirty-chars-xy token "
 [ "$(sort <<<"$skipped" | tr '\n' ' ')" = "$want_skipped" ] || { rs_ok=1; rs_detail="$rs_detail [skipped-tenants lists '$(sort <<<"$skipped" | tr '\n' ' ')', want $want_skipped]"; }
 yqs why "select(.kind == \"ConfigMap\" and .metadata.name == \"$P-skipped-tenants\") | .data.kubernetes" "$WORK/emit-enabled.yaml"
 grep -q 'Vault refuses a mount nested under another' <<<"$why" || { rs_ok=1; rs_detail="$rs_detail [the reason for kubernetes does not name the nesting: '$why']"; }
+yqs why30 "select(.kind == \"ConfigMap\" and .metadata.name == \"$P-skipped-tenants\") | .data.\"tenant-name-of-thirty-chars-xy\"" "$WORK/emit-enabled.yaml"
+grep -q 'over 29' <<<"$why30" || { rs_ok=1; rs_detail="$rs_detail [the reason for a 30-character name does not name the budget: '$why30']"; }
+[ "${#want_skipped}" -gt 0 ] && [ "$(printf 'tenant-name-of-thirty-chars-xy' | wc -c | tr -d ' ')" = 30 ] && [ "$(printf 'tenant-name-of-twenty-nine-xy' | wc -c | tr -d ' ')" = 29 ] \
+  || { rs_ok=1; rs_detail="$rs_detail [the fixture names are not 30 and 29 characters]"; }
 # A skipped name renders nothing at all: no mount, no TI, no label value.
 yqs mnames 'select(.kind == "SecretEngineMount" or .kind == "TemplateInstance") | .kind + "/" + .metadata.name' "$WORK/emit-enabled.yaml"
 for r in sys auth identity cubbyhole agent-registry token kubernetes secret has.dot; do
@@ -813,12 +1029,13 @@ pm_ok=0; pm_detail=""
 yqs pkinds 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .kind + "/" + .metadata.name + " " + .spec.path + "/" + .spec.name' "$WORK/emit-enabled.yaml"
 want_pm="$(printf '%s\n' "SecretEngineMount/shared-kv shared/kv" \
   "SecretEngineMount/team-a-kv team-a/kv" "SecretEngineMount/team-b-kv team-b/kv" \
-  "SecretEngineMount/empty-tenant-kv empty-tenant/kv" "SecretEngineMount/1234-kv 1234/kv" | sort | tr '\n' ' ')"
+  "SecretEngineMount/empty-tenant-kv empty-tenant/kv" "SecretEngineMount/1234-kv 1234/kv" \
+  "SecretEngineMount/tenant-name-of-twenty-nine-xy-kv tenant-name-of-twenty-nine-xy/kv" | sort | tr '\n' ' ')"
 [ "$(sort <<<"$pkinds" | tr '\n' ' ')" = "$want_pm" ] || { pm_ok=1; pm_detail="$pm_detail [parent VCO objects: want $want_pm got $(sort <<<"$pkinds" | tr '\n' ' ')]"; }
 yqs pmtypes 'select(.kind == "SecretEngineMount") | .spec.type + "/" + .spec.options.version' "$WORK/emit-enabled.yaml"
 [ "$(sort -u <<<"$pmtypes")" = "kv/2" ] || { pm_ok=1; pm_detail="$pm_detail [a secrets mount is not kv version 2: $(sort -u <<<"$pmtypes" | tr '\n' ' ')]"; }
 yqs pmlabels 'select(.kind == "SecretEngineMount" and .metadata.name != "shared-kv") | .metadata.name + "=" + .metadata.labels."stakater.com/tenant"' "$WORK/emit-enabled.yaml"
-for t in team-a team-b empty-tenant 1234; do
+for t in team-a team-b empty-tenant 1234 tenant-name-of-twenty-nine-xy; do
   grep -qx "$t-kv=$t" <<<"$pmlabels" || { pm_ok=1; pm_detail="$pm_detail [$t-kv does not carry its tenant label]"; }
 done
 check parentmounts "$pm_ok" "$pm_detail"
@@ -1000,10 +1217,217 @@ fi
 "$YQ" e -N "select(.kind == \"Template\" and .metadata.name == \"$P\") | .spec.helm.valuesTemplate" "$WORK/boot-enabled.yaml" > "$WORK/pp-def.yaml"
 yqs hastok 'has("token")' "$WORK/pp-def.yaml"
 [ "$hastok" = false ] || { pp_ok=1; pp_detail="$pp_detail [an unset parent.token emitted a token key]"; }
+# A ttl of 0 ("Vault's default" to the tenant chart) is plumbed, not dropped.
+printf 'parent:\n  token:\n    ttl: 0\n' > "$WORK/pp-zero.yaml"
+"$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/pp-zero.yaml" > "$WORK/pp-zero.out" 2>&1 \
+  || { pp_ok=1; pp_detail="$pp_detail [parent.token.ttl=0 failed the render: $(first "$WORK/pp-zero.out")]"; }
+"$YQ" e -N "select(.kind == \"Template\" and .metadata.name == \"$P\") | .spec.helm.valuesTemplate" "$WORK/pp-zero.out" > "$WORK/pp-zero-values.yaml"
+yqs ppzero '.token.ttl | tag + "=" + (. | tostring)' "$WORK/pp-zero-values.yaml"
+[ "$ppzero" = '!!int=0' ] || { pp_ok=1; pp_detail="$pp_detail [parent.token.ttl=0 reached the tenant chart as '$ppzero', want 0]"; }
 printf 'parent:\n  sso: null\n  token: null\n' > "$WORK/pp-null.yaml"
 "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/pp-null.yaml" > "$WORK/pp-null.out" 2>&1 \
   || { pp_ok=1; pp_detail="$pp_detail [a nulled parent.sso/token failed the render: $(first "$WORK/pp-null.out")]"; }
 check parentplumb "$pp_ok" "$pp_detail"
+
+# installvalues — the helpers with the schema removed, and the schema with
+# the templates stripped, each on its own.
+iv_ok=0; iv_detail=""
+iv_helper() { # iv_helper <label> <values YAML> <helper message>: the schema removed
+  printf '%s\n' "$2" > "$WORK/iv.yaml"
+  if "$HELM" template b "$WORK/noschema/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
+    iv_ok=1; iv_detail="$iv_detail [$1 rendered with the schema removed]"
+  else
+    grep -qF -- "$3" "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [$1 failed elsewhere: $(first "$WORK/iv.err")]"; }
+  fi
+}
+for c in "configNamespace:configNamespace: Vault-Config" \
+         "templateOperator.namespace:templateOperator: {namespace: \"\"}" \
+         "templateOperator.namespace:templateOperator: {namespace: \"a:b\"}" \
+         "templateOperator.serviceAccountName:templateOperator: {serviceAccountName: \"\"}" \
+         "vco.serviceAccount:vco: {serviceAccount: \"a b\"}" \
+         "vco.authPath:vco: {authPath: \"k8s x\"}" \
+         "parent.env:parent: {env: Prod}" \
+         "parent.sharedTenantName:parent: {sharedTenantName: sh.red}" \
+         "parent.tenantLabelKey:parent: {tenantLabelKey: \"a b\"}" \
+         "kubernetesAuth.path:kubernetesAuth: {path: \"k8s.x\"}" \
+         "kubernetesAuth.name:kubernetesAuth: {name: \"\"}" \
+         "tenantValues.sso.mount.path:tenantValues: {sso: {mount: {path: \"\"}}}" \
+         "tenantValues.sso.mount.name:tenantValues: {sso: {mount: {name: \"a b\"}}}"; do
+  iv_helper "${c%%:*}" "${c#*:}" "${c%%:*} \""
+done
+iv_helper "a reserved shared name" 'parent: {sharedTenantName: sys}' 'parent.sharedTenantName "sys" is a reserved name'
+iv_helper "a shared name in reservedPaths" 'parent: {sharedTenantName: secret}' 'parent.sharedTenantName "secret" is a reserved name'
+iv_helper "ttl over maxTTL" 'parent: {token: {ttl: 7200, maxTTL: 3600}}' 'parent.token.ttl 7200 is over parent.token.maxTTL 3600'
+# One side set: the other is the tenant chart's default (ttl 3600, maxTTL
+# 14400, pinned by tenantvaluekeys), and the tenant chart compares the two.
+iv_helper "a ttl over the default maxTTL" 'parent: {token: {ttl: 20000}}' 'parent.token.ttl 20000 is over parent.token.maxTTL 14400'
+iv_helper "a maxTTL under the default ttl" 'parent: {token: {maxTTL: 1800}}' 'parent.token.ttl 3600 is over parent.token.maxTTL 1800'
+iv_helper "an empty vco.role" 'vco: {role: ""}' 'vco.role "" must be set'
+# The Kubernetes and SSO auth mounts: never one path, never one inside the
+# other (auth/<tenant>/oidc/sso by default).
+iv_helper "both mounts on one path" 'kubernetesAuth: {path: oidc, name: sso}' 'kubernetesAuth (auth/<tenant>/oidc/sso) and tenantValues.sso.mount (auth/<tenant>/oidc/sso)'
+iv_helper "the Kubernetes mount inside the SSO mount" 'kubernetesAuth: {path: oidc/sso, name: apps}' 'kubernetesAuth (auth/<tenant>/oidc/sso/apps) and tenantValues.sso.mount (auth/<tenant>/oidc/sso)'
+iv_helper "the SSO mount inside the Kubernetes mount" 'tenantValues: {sso: {mount: {path: kubernetes/workloads, name: sso}}}' 'kubernetesAuth (auth/<tenant>/kubernetes/workloads) and tenantValues.sso.mount (auth/<tenant>/kubernetes/workloads/sso)'
+# Wrong types the tenant chart can't read: the schema refuses each, on its
+# own (the templates stripped).
+for c in 'tenantValues: {roleCaps: null}' 'tenantValues: {roleCaps: {admin: [read]}}' \
+         'tenantValues: {sso: {tenantRoleMapping: []}}' 'tenantValues: {sso: {tenantRoleMapping: {admin: {pattern: ["{tenant}-x"]}}}}' \
+         'tenantValues: {ssoToken: ""}' 'tenantValues: {ssoToken: {ttl: 900}}' \
+         'tenantValues: {sso: {oidc: {clientSecretRef: x}}}' 'tenantValues: {sso: {oidc: {clientSecretRef: {name: 1}}}}' \
+         'tenantValues: {sso: {oidc: {caBundlePem: 123}}}' 'tenantValues: {vaultCABundle: 123}' \
+         'tenantValues: {sso: {oidc: {clientId: ""}}}' 'tenantValues: {sso: {tenantGroupTemplate: [x]}}' \
+         'tenantValues: {sso: {mount: {name: 1}}}' 'tenantValues: {monitoring: {prometheusNamespace: 1}}'; do
+  printf '%s\n' "$c" > "$WORK/iv.yaml"
+  if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
+    iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
+  fi
+done
+# Their right forms pass the schema, the helpers' near misses too.
+printf '%s\n' 'tenantValues: {vaultCABundle: pem, ssoToken: {ttl: 30m, maxTTL: 2h}, roleCaps: {ops: "[\"read\"]"}, sso: {roles: [admin, ops], tenantGroupTemplate: "{tenant}-{role}s", tenantRoleMapping: {admin: {pattern: "ops-{tenant}-x"}, ops: {}, fallback: deny}, mount: {path: oidc, name: sso}, oidc: {clientId: vault, clientSecretRef: {name: a, key: b}, caBundlePem: pem}}, monitoring: {prometheusNamespace: monitoring}}' > "$WORK/iv.yaml"
+"$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err" \
+  || { iv_ok=1; iv_detail="$iv_detail [the schema refused the right types: $(first "$WORK/iv.err")]"; }
+# The schema refuses the ones it has a pattern for, on its own.
+for c in 'templateOperator: {namespace: ""}' 'templateOperator: {serviceAccountName: "a:b"}' 'parent: {sharedTenantName: sh.red}' 'configNamespace: Vault-Config'; do
+  printf '%s\n' "$c" > "$WORK/iv.yaml"
+  if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
+    iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
+  fi
+done
+# Near misses that must install.
+for c in 'kubernetesAuth: {path: kubernetes_prod}' 'parent: {token: {ttl: 3600, maxTTL: 3600}}' 'parent: {sharedTenantName: shares}' \
+         'parent: {token: {ttl: 14400}}' 'parent: {token: {maxTTL: 3600}}' 'parent: {token: {ttl: 20000, maxTTL: 0}}' \
+         'parent: {token: {ttl: 0, maxTTL: 1800}}' 'kubernetesAuth: {path: oidc, name: workloads}' 'kubernetesAuth: {path: oidc, name: ssox}'; do
+  printf '%s\n' "$c" > "$WORK/iv.yaml"
+  "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err" \
+    || { iv_ok=1; iv_detail="$iv_detail [$c was refused: $(first "$WORK/iv.err")]"; }
+done
+# The helpers alone: a quote in a role pattern stops the CEL compiling.
+printf '%s\n' "tenantValues: {sso: {tenantRoleMapping: {admin: {pattern: \"{tenant}'s-admins\"}}}}" > "$WORK/iv.yaml"
+if "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
+  iv_ok=1; iv_detail="$iv_detail [a quote in a role pattern rendered]"
+else
+  grep -q 'contains a quote, a double quote or a backslash' "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [a quoted pattern failed elsewhere: $(first "$WORK/iv.err")]"; }
+fi
+# Positive control: the lab's and the e2e suite's values pass the schema.
+"$HELM" template b "$WORK/notpl/boot" -n "$NS" --set configNamespace=vault-config --set vco.serviceAccount=vco-admin \
+  --set templateOperator.serviceAccountName=template-operator-v2-controller-manager --set templateOperator.namespace=template-operator-v2-system \
+  --set tenantChart.registry=http://chart-repo --set parent.eso=enabled --set parent.externalSecretRefreshInterval=15s \
+  --set parent.sso.enabled=true --set parent.sso.issuerUrl=http://dex:5556 --set 'parent.sso.allowedRedirectUris[0]=http://localhost:8250/oidc/callback' \
+  --set tenantValues.monitoring.enabled=true --set tenantValues.sso.oidc.clientId=vault > /dev/null 2>"$WORK/iv.err" \
+  || { iv_ok=1; iv_detail="$iv_detail [the schema refused the lab's values: $(first "$WORK/iv.err")]"; }
+check installvalues "$iv_ok" "$iv_detail"
+
+# schemakeys — every object the schema closes refuses a key it does not list.
+# The objects are found by walking the schema, and the list is pinned: an
+# object opened again (additionalProperties: true, the line dropped, or the
+# node replaced by a bare type) or a new one changes the list and fails here.
+# Change SK_CLOSED with the schema.
+SK_CLOSED="<root> admission kubernetesAuth parent parent.sso parent.token sync templateOperator tenantChart tenantValues
+tenantValues.monitoring tenantValues.sso tenantValues.sso.mount tenantValues.sso.oidc tenantValues.sso.oidc.clientSecretRef
+tenantValues.ssoToken vco"
+sk_ok=0; sk_detail=""
+python3 - "$BOOTSTRAP/values.schema.json" > "$WORK/sk.paths" <<'PY' || { echo "FAIL  infra — cannot walk the bootstrap schema"; exit 1; }
+import json, sys
+schema = json.load(open(sys.argv[1]))
+closed = []
+def walk(node, path):
+    if not isinstance(node, dict):
+        return
+    if "properties" in node:
+        closed.append((path, node.get("additionalProperties") is False))
+        for k, v in node["properties"].items():
+            walk(v, path + [k])
+walk(schema, [])
+for path, is_closed in closed:
+    print(("." .join(path) or "<root>") + "	" + ("closed" if is_closed else "open"))
+PY
+sk_got="$(cut -f1 "$WORK/sk.paths" | sort | tr '\n' ' ')"
+sk_want="$(printf '%s\n' $SK_CLOSED | sort | tr '\n' ' ')"
+[ "$sk_got" = "$sk_want" ] || { sk_ok=1; sk_detail="$sk_detail [the objects with properties are '$sk_got', want '$sk_want']"; }
+while IFS=$'\t' read -r path state; do
+  [ "$state" = closed ] || { sk_ok=1; sk_detail="$sk_detail [$path lists its keys but accepts any other]"; continue; }
+  key="zzMisspelt"; [ "$path" = "<root>" ] || key="$path.zzMisspelt"
+  if "$HELM" template b "$WORK/notpl/boot" -n "$NS" --set "$key=x" > /dev/null 2>"$WORK/sk.err"; then
+    sk_ok=1; sk_detail="$sk_detail [the schema accepted $key]"
+  else
+    grep -q 'zzMisspelt' "$WORK/sk.err" || { sk_ok=1; sk_detail="$sk_detail [$key failed elsewhere: $(first "$WORK/sk.err")]"; }
+  fi
+done < "$WORK/sk.paths"
+for obj in vco kubernetesAuth templateOperator tenantChart parent; do
+  printf '%s: null\n' "$obj" > "$WORK/sk-null.yaml"
+  if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/sk-null.yaml" > /dev/null 2>"$WORK/sk.err"; then
+    sk_ok=1; sk_detail="$sk_detail [the schema accepted $obj: null]"
+  fi
+done
+check schemakeys "$sk_ok" "$sk_detail"
+
+# tenantvaluekeys — the bootstrap schema's tenantValues keys are the tenant
+# chart's values.yaml keys, plus the removed keys whose guards name the fix.
+tk_ok=0; tk_detail=""
+SCHEMA="$BOOTSTRAP/values.schema.json"
+tk_pair() { # tk_pair <label> <schema path> <values path> <removed keys...>
+  local label="$1" sp="$2" vp="$3" want got; shift 3
+  yqs got "$sp | keys | .[]" "$SCHEMA"
+  yqs want "$vp | keys | .[]" "$CHART/values.yaml"
+  want="$(printf '%s\n' "$want" "$@" | grep . | sort | tr '\n' ' ')"
+  got="$(tr -d '"' <<<"$got" | sort | tr '\n' ' ')"  # yq prints a JSON file's keys quoted
+  [ -n "$got" ] && [ "$got" = "$want" ] || { tk_ok=1; tk_detail="$tk_detail [$label: schema '$got', tenant values '$want']"; }
+}
+tk_pair tenantValues '.properties.tenantValues.properties' '.' networkPolicy
+tk_pair sso '.properties.tenantValues.properties.sso.properties' '.sso' audience
+tk_pair sso.oidc '.properties.tenantValues.properties.sso.properties.oidc.properties' '.sso.oidc' perTenantClient
+tk_pair sso.mount '.properties.tenantValues.properties.sso.properties.mount.properties' '.sso.mount'
+tk_pair monitoring '.properties.tenantValues.properties.monitoring.properties' '.monitoring'
+mkdir -p "$WORK/dr/templates" && cp "$BOOTSTRAP/templates/_helpers.tpl" "$WORK/dr/templates/" && cp "$BOOTSTRAP/Chart.yaml" "$WORK/dr/" \
+  && printf 'roles: {{ include "mto-extension-vault-community-bootstrap.defaultRoles" . | fromYamlArray | sortAlpha | join "," }}\ntoken: {{ include "mto-extension-vault-community-bootstrap.defaultToken" . | fromYaml | toJson }}\n' > "$WORK/dr/templates/x.yaml"
+"$HELM" template b "$WORK/dr" > "$WORK/dr.out" 2>"$WORK/dr.err" || { echo "FAIL  infra — cannot render the default roles: $(first "$WORK/dr.err")"; exit 1; }
+yqs bootroles '.roles' "$WORK/dr.out"
+yqs tenroles '.sso.roles | sort | join(",")' "$CHART/values.yaml"
+yqs tencaps '.roleCaps | keys | sort | join(",")' "$CHART/values.yaml"
+[ "$bootroles" = "$tenroles" ] && [ "$bootroles" = "$tencaps" ] \
+  || { tk_ok=1; tk_detail="$tk_detail [the bootstrap's default roles '$bootroles', the tenant chart's sso.roles '$tenroles' and roleCaps '$tencaps']"; }
+# The token defaults the install compares a one-sided parent.token with.
+yqs boottok '(.token.ttl | tostring) + "/" + (.token.maxTTL | tostring)' "$WORK/dr.out"
+yqs tentok '(.token.ttl | tostring) + "/" + (.token.maxTTL | tostring)' "$CHART/values.yaml"
+[ -n "$tentok" ] && [ "$boottok" = "$tentok" ] \
+  || { tk_ok=1; tk_detail="$tk_detail [the bootstrap's default token ttl/maxTTL '$boottok', the tenant chart's '$tentok']"; }
+check tenantvaluekeys "$tk_ok" "$tk_detail"
+
+# dnsregex — one DNS-label regex, everywhere. Every character class with a-z
+# or A-Z in the charts must belong to one of the known forms below; a copy
+# loosened (a dot, an uppercase letter) or spelt another way ([a-z0-9-]) is
+# left over and fails. A new form is added here on purpose, with its reason.
+dr_ok=0; dr_detail=""
+python3 - "$REPO_ROOT/charts" > "$WORK/dr.out" <<'PY' || { echo "FAIL  infra — the dnsregex scan failed"; exit 1; }
+import os, sys
+known = [
+    "[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?",          # a label key's name part
+    "[A-Za-z0-9_-]([A-Za-z0-9._/-]*[A-Za-z0-9_-])?",     # a secret path in a Deployment annotation
+    "[A-Za-z0-9._-]+", "[-._a-zA-Z0-9]+",                # a Secret key
+    "[a-z0-9]([-a-z0-9]*[a-z0-9])?",                     # THE DNS label
+    "^([a-z0-9][-a-z0-9]*)?$", "^([-a-z0-9]*[a-z0-9])?$",  # the head and tail of one (ssoCollision)
+    "[a-z0-9_][-a-z0-9_.]*",                             # a KV path segment under <env>/
+    "[a-z0-9_][-a-z0-9_]*",                              # a Vault mount path segment
+    "[a-z]+",                                            # a capability
+]
+labels = 0
+for root, _, files in os.walk(sys.argv[1]):
+    for f in sorted(files):
+        path = os.path.join(root, f)
+        for n, line in enumerate(open(path, encoding="utf-8"), 1):
+            labels += line.count(known[4])
+            rest = line
+            for k in known:
+                rest = rest.replace(k, "")
+            if "a-z" in rest or "A-Z" in rest:
+                print(f"BAD {os.path.relpath(path, sys.argv[1])}:{n}: {line.strip()[:120]}")
+print(f"LABELS {labels}")
+PY
+dr_bad="$(grep '^BAD ' "$WORK/dr.out" || true)"
+[ -z "$dr_bad" ] || { dr_ok=1; dr_detail="$dr_detail [regexes of no known form: $(sed 's/^BAD //' <<<"$dr_bad" | tr '\n' '|')]"; }
+dr_n="$(sed -n 's/^LABELS //p' "$WORK/dr.out")"
+[ "${dr_n:-0}" -ge 30 ] || { dr_ok=1; dr_detail="$dr_detail [$dr_n DNS-label copies found — the check proves nothing]"; }
+check dnsregex "$dr_ok" "$dr_detail"
 
 # versionpin
 tv="$("$YQ" e '.version' "$CHART/Chart.yaml")"
@@ -1070,7 +1494,7 @@ done
 # From a values file, and asserted on the guard's own message: `--set` reads
 # {…} as list syntax, so a --set value fails in helm's argument parser before it
 # reaches the chart, and this check then passed with the guard deleted.
-printf 'tenantValues:\n  sso:\n    tenantGroupTemplate: "{{ .x }}"\n' > "$WORK/tv-braces.yaml"
+printf 'tenantValues:\n  sso:\n    tenantGroupTemplate: "{tenant}-{role}-{{ .x }}"\n' > "$WORK/tv-braces.yaml"
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/tv-braces.yaml" > /dev/null 2>"$WORK/tv.err"; then
   tv_ok=1; tv_detail="$tv_detail [a value containing {{ was accepted]"
 else
@@ -1137,14 +1561,18 @@ check listingvis "$lv_ok" "$lv_detail"
 ad_ok=0; ad_detail=""
 yqs vaps 'select(.kind == "ValidatingAdmissionPolicy") | .metadata.name' "$WORK/boot-default.yaml"
 yqs vapbs 'select(.kind == "ValidatingAdmissionPolicyBinding") | .metadata.name + "=" + .spec.policyName + "=" + (.spec.validationActions | join(","))' "$WORK/boot-default.yaml"
-for p in origin scope cluster; do
+for p in kinds origin scope cluster; do
   grep -qx "$P-vco-$p" <<<"$vaps" || { ad_ok=1; ad_detail="$ad_detail [no admission policy $P-vco-$p]"; }
   grep -qx "$P-vco-$p=$P-vco-$p=Deny" <<<"$vapbs" || { ad_ok=1; ad_detail="$ad_detail [no Deny binding for $P-vco-$p]"; }
 done
 yqs fp 'select(.kind == "ValidatingAdmissionPolicy") | .spec.failurePolicy' "$WORK/boot-default.yaml"
 [ "$(sort -u <<<"$fp")" = Fail ] || { ad_ok=1; ad_detail="$ad_detail [failurePolicy is not Fail everywhere: $(sort -u <<<"$fp" | tr '\n' ' ')]"; }
+yqs adscope 'select(.kind == "ValidatingAdmissionPolicy" and (.metadata.name | test("-vco-(kinds|origin)$"))) | .metadata.name + "=" + (.spec.matchConstraints.resourceRules[0].resources | join(",")) + "/" + .spec.matchConstraints.resourceRules[0].scope' "$WORK/boot-default.yaml"
+[ "$(sort <<<"$adscope" | tr '\n' ' ')" = "$P-vco-kinds=*/Namespaced $P-vco-origin=*/Namespaced " ] \
+  || { ad_ok=1; ad_detail="$ad_detail [the kinds and origin policies do not match every namespaced kind: $(tr '\n' ' ' <<<"$adscope")]"; }
 cat > "$WORK/ad.yaml" <<'YAML'
 configNamespace: cfg-x
+vco: { authPath: k8s-login, role: vco-x, serviceAccount: vco-sa-x }
 templateOperator: { namespace: tov-ns, serviceAccountName: tov-sa }
 kubernetesAuth: { kubernetesHost: "https://api.example.com:6443", tokenReviewerServiceAccount: rev-sa }
 parent:
@@ -1160,7 +1588,8 @@ YAML
   || { ad_ok=1; ad_detail="$ad_detail [bootstrap with other values failed: $(first "$WORK/ad.err")]"; }
 yqs adcel 'select(.kind == "ValidatingAdmissionPolicy") | .. | select(tag == "!!str")' "$WORK/ad.out"
 for want in "system:serviceaccount:tov-ns:tov-sa" "'example.com/tenant': variables.t" "https://api.example.com:6443" \
-  "https://idp.example.com/realms/x" "'admin': 'ops-{tenant}'" "'editor': 'grp-{tenant}-{role}'" "'platform-x'" "'rev-sa'"; do
+  "https://idp.example.com/realms/x" "'admin': 'ops-{tenant}'" "'editor': 'grp-{tenant}-{role}'" "'platform-x'" "'rev-sa'" \
+  "authentication.path == 'k8s-login'" "authentication.role == 'vco-x'" "serviceAccount.name == 'vco-sa-x'"; do
   grep -qF -- "$want" <<<"$adcel" || { ad_ok=1; ad_detail="$ad_detail [the admission policies do not carry '$want']"; }
 done
 yqs adns 'select(.kind == "ValidatingAdmissionPolicy") | .spec.matchConstraints.namespaceSelector.matchLabels."kubernetes.io/metadata.name"' "$WORK/ad.out"
@@ -1191,9 +1620,19 @@ want_d='<   capabilities = ["create", "read", "update"]
 [ "$d" = "$want_d" ] || { vp_ok=1; vp_detail="$vp_detail [production and lab policies differ by more than the kv delete: $(tr '\n' '|' <<<"$d")]"; }
 stanzas "$PROD" | grep -A1 '^path "sys/mounts/+/kv" {$' | grep -qx '  capabilities = \["create", "read", "update"\]' \
   || { vp_ok=1; vp_detail="$vp_detail [the production kv mount grant is not create, read, update]"; }
+# Exactly these paths, nothing else: a denylist misses the next form (a
+# sys/policies/acl/* or a sys/policy/+ grant both reach vco-admin).
+want_paths="$(printf '%s\n' sys/mounts 'sys/mounts/+/kv' 'sys/mounts/+/kv/tune' sys/auth \
+  'sys/auth/+/kubernetes/workloads' 'sys/auth/+/kubernetes/workloads/tune' 'sys/auth/+/oidc/sso' 'sys/auth/+/oidc/sso/tune' \
+  'auth/+/kubernetes/workloads/config' 'auth/+/kubernetes/workloads/role/kv.*' 'auth/+/kubernetes/workloads/role/share.*' \
+  'auth/+/oidc/sso/config' 'auth/+/oidc/sso/role/sso.*' 'sys/policy/kv.*' 'sys/policy/share.*' 'sys/policy/sso.*' | sort)"
 for f in "$PROD" "$LAB"; do
-  paths="$(grep -oE '^path "[^"]+"' "$f" | sed -e 's/^path "//' -e 's/"$//')"
+  # Every path stanza, whatever its spacing: one grep for a strict form would
+  # miss `path  "x"` or a stanza on the same line as another.
+  paths="$(sed -e 's/#.*//' "$f" | grep -oE 'path[[:space:]]*"[^"]*"' | sed -E 's/^path[[:space:]]*"//; s/"$//')"
   [ "$(lines "$paths")" -ge 15 ] || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f"): only $(lines "$paths") paths — the check proves nothing]"; }
+  [ "$(sort <<<"$paths")" = "$want_paths" ] \
+    || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f") grants other paths: $(diff <(echo "$want_paths") <(sort <<<"$paths") | grep -E '^[<>]' | tr '\n' ' ' || true)]"; }
   bad="$(grep -E '^(sys/policy/\*|sys/mounts/\*|sys/auth/\*|auth/\*|auth/kubernetes/|auth/token|sys/policy/vco-admin|sys/policy/default|\*)' <<<"$paths" || true)"
   [ -z "$bad" ] || { vp_ok=1; vp_detail="$vp_detail [$(basename "$f") grants $(tr '\n' ' ' <<<"$bad")]"; }
   grep -q 'sudo' <(grep -A2 -E '^path "(sys/policy|auth/)' "$f") && { vp_ok=1; vp_detail="$vp_detail [$(basename "$f") gives sudo on a policy or role path]"; }
@@ -1212,11 +1651,16 @@ cat > "$WORK/stub/helm" <<'STUB'
 echo "$*" >> "$STUB_LOG"
 case "$1" in
   show) case "$STUB_MODE" in
-          published) echo "name: x"; exit 0 ;;
+          published*) echo "name: x"; exit 0 ;;
           notfound)  echo "Error: ghcr.io/x: not found" >&2; exit 1 ;;
           *)         echo "Error: unauthorized: authentication required" >&2; exit 1 ;;
         esac ;;
-  package) mkdir -p "$4"; touch "$4/$(awk '/^name:/{print $2; exit}' "$2/Chart.yaml")-$(awk '/^version:/{print $2; exit}' "$2/Chart.yaml").tgz" ;;
+  # pull <ref> --version <v> --untar --untardir <dir>: the published chart,
+  # the same as the source or, in mode published-other, edited.
+  pull) d="$7"; mkdir -p "$d"; cp -R "$STUB_CHART" "$d/"
+        [ "$STUB_MODE" = published-other ] && echo "# changed" >> "$d/$(basename "$STUB_CHART")/values.yaml"; exit 0 ;;
+  package) mkdir -p "$4"; n="$(awk '/^name:/{print $2; exit}' "$2/Chart.yaml")"
+           tar -czf "$4/$n-$(awk '/^version:/{print $2; exit}' "$2/Chart.yaml").tgz" -C "$(dirname "$2")" "$(basename "$2")" ;;
   push) exit 0 ;;
 esac
 STUB
@@ -1224,13 +1668,15 @@ chmod +x "$WORK/stub/helm"
 rl_case() { # rl_case <mode> <expect-exit 0|1> <expect-push yes|no>
   local rc=0
   : > "$WORK/stub.log"
-  (cd "$WORK" && STUB_MODE="$1" STUB_LOG="$WORK/stub.log" HELM="$WORK/stub/helm" \
+  (cd "$WORK" && STUB_MODE="$1" STUB_LOG="$WORK/stub.log" STUB_CHART="$CHART" HELM="$WORK/stub/helm" \
      bash -e "$REPO_ROOT/hack/release-chart.sh" "$CHART" ghcr.io/example/charts) > "$WORK/rl.out" 2>&1 || rc=$?
   [ "$rc" -eq "$2" ] || rl_detail="$rl_detail [$1: exit $rc, want $2: $(first "$WORK/rl.out")]"
   if grep -q '^push ' "$WORK/stub.log"; then pushed=yes; else pushed=no; fi
   [ "$pushed" = "$3" ] || rl_detail="$rl_detail [$1: pushed=$pushed, want $3]"
 }
 rl_case published 0 no
+rl_case published-other 1 no
+grep -q 'already published with other content' "$WORK/rl.out" || rl_detail="$rl_detail [published-other: no message naming the conflict: $(first "$WORK/rl.out")]"
 rl_case notfound 0 yes
 rl_case unauthorized 1 no
 [ -z "$rl_detail" ] || rl_ok=1
@@ -1246,16 +1692,52 @@ git -C "$G" init -q -b main && git -C "$G" -c user.email=t@t -c user.name=t add 
 git -C "$G" switch -q -c pr
 bc_case() { # bc_case <label> <expect-exit 0|1>
   local rc=0
-  (cd "$G" && git -c user.email=t@t -c user.name=t commit -qam "$1" --allow-empty && "$REPO_ROOT/hack/version-bump-check.sh" main charts/a charts/b charts/c) > "$WORK/bc.out" 2>&1 || rc=$?
+  # shellcheck disable=SC2086 # bc_dirs is a list
+  (cd "$G" && git -c user.email=t@t -c user.name=t commit -qam "$1" --allow-empty && "$REPO_ROOT/hack/version-bump-check.sh" main $bc_dirs) > "$WORK/bc.out" 2>&1 || rc=$?
   [ "$rc" -eq "$2" ] || bc_detail="$bc_detail [$1: exit $rc, want $2: $(tail -1 "$WORK/bc.out")]"
 }
+bc_dirs="charts/a charts/b"
 bc_case unchanged 0
 printf 'x: 1\n' > "$G/charts/a/values.yaml"; git -C "$G" add charts/a/values.yaml
 bc_case changed-no-bump 1
+# The same, with the chart directory given as charts/a/: Chart.yaml must still
+# be found on the base, not read as a new chart.
+bc_slash() {
+  local rc=0
+  (cd "$G" && "$REPO_ROOT/hack/version-bump-check.sh" main charts/a/ charts/b) > "$WORK/bc.out" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] && grep -q 'charts/a: changed but still at version' "$WORK/bc.out" \
+    || bc_detail="$bc_detail [charts/a/ changed without a bump: exit $rc, want 1 naming the missing bump: $(tail -1 "$WORK/bc.out")]"
+}
+bc_slash
+# An absolute path and a directory that exists nowhere fail; neither is a new chart.
+bc_path() { # bc_path <label> <dir> <message>
+  local rc=0
+  (cd "$G" && "$REPO_ROOT/hack/version-bump-check.sh" main "$2") > "$WORK/bc.out" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] && grep -q -- "$3" "$WORK/bc.out" \
+    || bc_detail="$bc_detail [$1: exit $rc: $(tail -1 "$WORK/bc.out")]"
+}
+bc_path absolute "$G/charts/a" 'relative to the repository root'
+bc_path missing charts/nope 'no such chart directory'
 sed -i.bak 's/^version: 0.1.0/version: 0.1.1/' "$G/charts/a/Chart.yaml" && rm -f "$G/charts/a/Chart.yaml.bak"
 bc_case changed-with-bump 0
 mkdir -p "$G/charts/c" && printf 'name: c\nversion: 0.0.1\n' > "$G/charts/c/Chart.yaml" && git -C "$G" add charts/c
+bc_dirs="charts/a charts/b charts/c"
 bc_case new-chart 0
+# A directory on the base without a readable Chart.yaml is an error, not a
+# new chart that passes.
+bc_nochart() {
+  local rc=0
+  git -C "$G" switch -q main && mkdir -p "$G/charts/d" && printf 'x: 1\n' > "$G/charts/d/values.yaml" \
+    && git -C "$G" add charts/d && git -C "$G" -c user.email=t@t -c user.name=t commit -qm d \
+    && git -C "$G" switch -q pr && git -C "$G" -c user.email=t@t -c user.name=t merge -q --no-edit main >/dev/null \
+    && printf 'x: 2\n' > "$G/charts/d/values.yaml" && printf 'name: d\nversion: 0.0.1\n' > "$G/charts/d/Chart.yaml" \
+    && git -C "$G" add charts/d && git -C "$G" -c user.email=t@t -c user.name=t commit -qm d2 \
+    || { bc_detail="$bc_detail [could not build the charts/d case]"; return; }
+  (cd "$G" && "$REPO_ROOT/hack/version-bump-check.sh" main charts/d) > "$WORK/bc.out" 2>&1 || rc=$?
+  [ "$rc" -eq 1 ] && grep -q 'has no readable Chart.yaml' "$WORK/bc.out" \
+    || bc_detail="$bc_detail [charts/d without a Chart.yaml on the base: exit $rc: $(tail -1 "$WORK/bc.out")]"
+}
+bc_nochart
 [ -z "$bc_detail" ] || bc_ok=1
 check bumpcheck "$bc_ok" "$bc_detail"
 

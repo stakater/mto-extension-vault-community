@@ -6,8 +6,9 @@ description: |
   Tenant CR), the child Templates that pull the mto-extension-vault-community
   chart, the ServiceAccount every VCO CR logs in to Vault with, and the t-op-v2
   RBAC needed to manage TemplateInstances, VCO CRs, and the workload-side
-  objects. The parent renders every tenant's KV mount <tenant>/kv, and the
-  shared mount and shared auth mount for cross-tenant shares.
+  objects, and the ValidatingAdmissionPolicies on the VCO CRs. The parent
+  renders every tenant's KV mount <tenant>/kv, and the shared mount shared/kv
+  for cross-tenant shares.
 
   Requires: multi-tenant-operator (Tenant CRD), template-operator-v2 >= 0.0.5
   (child TemplateInstances need namespaceSelector), vault-config-operator

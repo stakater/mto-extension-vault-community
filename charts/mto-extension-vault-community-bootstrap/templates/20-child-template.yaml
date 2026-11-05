@@ -46,8 +46,9 @@ spec:
   parameters:
     - name: tenant
       required: true
-    # Roster of all real tenant names (CSV). Stamped per-child by the parent
-    # gotemplate; the chart skips cross-tenant shares whose peer isn't listed.
+    # Roster of the tenants a share can target (CSV): those the parent renders
+    # that have a labelled namespace. Stamped per child by the parent
+    # gotemplate; the chart skips a cross-tenant share whose peer isn't listed.
     - name: knownTenants
       value: ""
     - name: serviceAccounts

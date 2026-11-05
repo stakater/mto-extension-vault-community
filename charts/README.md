@@ -68,7 +68,10 @@ The parent **skips** a Tenant, and lists it with the reason in the ConfigMap
 `mto-extension-vault-community-skipped-tenants` in `configNamespace`, when its
 name is:
 
-- not a DNS label, or longer than 63 characters (it is a label value);
+- not a DNS label, or longer than 29 characters: the child TemplateInstance
+  `mto-extension-vault-community-<tenant>.eso` is a label value on every object
+  it renders, and a label value caps at 63. (Set before the first release:
+  lowering it later would skip tenants that rendered before.)
 - the shared name (`parent.sharedTenantName`, default `shared`);
 - the first segment of a path Vault or the platform already uses. A tenant's
   mounts start with its name, and Vault refuses a mount nested under another.
@@ -120,19 +123,34 @@ below.
 
 ## Admission policies
 
-The bootstrap chart installs three ValidatingAdmissionPolicies on the VCO CRs
-in `configNamespace` (Kubernetes 1.30 or later). They are the wall between
-tenants that Vault Community does not have, and they hold for every writer of
-`configNamespace` — the charts, Template Operator, a person:
+The bootstrap chart installs four ValidatingAdmissionPolicies on the
+`redhatcop.redhat.io` objects in `configNamespace` (Kubernetes 1.30 or later).
+They are the wall between tenants that Vault Community does not have, and they
+hold for every writer of `configNamespace` — the charts, Template Operator, a
+person:
 
 | Policy | Refuses |
 |---|---|
-| `mto-extension-vault-community-vco-origin` | a VCO CR that Template Operator writes for a TemplateInstance outside `configNamespace`. A Template in a tenant namespace can name `configNamespace`, and Template Operator applies it with its own rights. |
-| `mto-extension-vault-community-vco-scope` | a policy, role or mount outside its tenant's scope: a name outside the `kv.`, `share.` and `sso.` families, a policy line that is not a one-line `path` stanza or grants `sudo`, a path outside `<tenant>/kv/…` (or its share in `shared/kv/…`), a role not bound to exactly its own policy, its tenant's mount, its ServiceAccount and its namespace by name and tenant label, an SSO role not bound to exactly its tenant's group, a mount of another shape or at a reserved name, an OIDC config at another issuer. |
+| `mto-extension-vault-community-vco-kinds` | a VCO CR without a spec; any kind but the seven the extension renders (VCO has about 80: an `AppRoleAuthEngineRole` would write a role on a tenant's mount unchecked); any `spec.connection` (VCO would send its root-equivalent login JWT to that address); any `spec.authentication` but the install's `vco.authPath`, `vco.role` and `vco.serviceAccount`, or one with a Vault namespace. |
+| `mto-extension-vault-community-vco-origin` | an object Template Operator renders for a TemplateInstance outside `configNamespace`. A Template in a tenant namespace can name `configNamespace`, and Template Operator applies it with its own rights. Template Operator stamps every object it writes with its source (`templates.v2.stakater.com/instance-namespace`), so this holds for any writer, even with a wrong `templateOperator.*`. |
+| `mto-extension-vault-community-vco-scope` | a policy, role or mount outside its tenant's scope: a name outside the `kv.`, `share.` and `sso.` families, a policy with a `type`, a policy line that is not a one-line `path` stanza or grants `sudo`, a path outside `<tenant>/kv/…` (or its share in `shared/kv/…`), a role not bound to exactly its own policy, its tenant's mount, its ServiceAccount and its namespace by name and tenant label, an SSO role not bound to exactly its tenant's group, a mount of another shape or at a reserved name, an OIDC config at another issuer. |
 | `mto-extension-vault-community-vco-cluster` | a Kubernetes auth config for another API or another CA than this cluster's `kube-root-ca.crt`. |
 
-Each has failure policy `Fail`. A deletion is never refused. `admission.enabled`
-exists only for clusters older than 1.30; turning it off removes the wall.
+Each has failure policy `Fail`. A deletion is never refused: VCO's finalizer
+updates pass while the spec is unchanged, or while neither side has a spec (a
+CR written with the policies off); a spec changed, removed or added during a
+deletion is checked. `admission.enabled` exists only for clusters older than
+1.30; turning it off removes the wall. `make admission-offline` runs the
+policies' CEL against the 77 cases of `hack/lab/admission-cases.sh` without a
+cluster (it is part of `make verify`); `make admission-test` runs 74 of them
+on the lab, the update and deletion cases on an old object it creates and
+holds in deletion. The 3 whose old object the policies refuse run offline
+only.
+
+**Who writes to `configNamespace`.** Only Template Operator and Vault admins
+should. The policies hold for anyone who can, but a writer there can still
+delete the extension's objects, which revokes tenants' access (never their
+data: VCO can't delete a kv mount).
 
 ## Install
 
@@ -149,20 +167,49 @@ Values that matter (bootstrap chart):
 |---|---|---|
 | `configNamespace` | `vault-config` | Holds every Template, TemplateInstance and VCO CR. Install the chart into it. |
 | `vco.authPath` / `vco.role` / `vco.serviceAccount` | `kubernetes` / `vco-admin` / `vco-admin` | How VCO logs in. Must match the Vault bootstrap. There is no `vco.namespace`. |
-| `kubernetesAuth.path` / `.name` | `kubernetes` / `workloads` | The workload auth mount: `auth/<tenant>/kubernetes/workloads`. |
+| `kubernetesAuth.path` / `.name` | `kubernetes` / `workloads` | The workload auth mount: `auth/<tenant>/kubernetes/workloads`. Not the SSO mount's path (`tenantValues.sso.mount`, `oidc/sso`), and not inside it or around it: the install fails. |
 | `kubernetesAuth.tokenReviewerServiceAccount` | `""` | Set only when Vault runs outside the cluster. |
-| `templateOperator.serviceAccountName` / `.namespace` | `template-operator-template-operator-v2` / `stakater-template-operator` | t-op-v2's identity, which the RBAC binds to. |
+| `templateOperator.serviceAccountName` / `.namespace` | `template-operator-template-operator-v2` / `stakater-template-operator` | t-op-v2's identity, which the RBAC binds to. A name each; an empty or malformed value fails the install. |
 | `tenantChart.registry` / `.version` | `oci://ghcr.io/stakater/charts` / chart version | Where t-op-v2 pulls the tenant chart. |
-| `parent.sharedTenantName` | `shared` | The prefix of the shared mounts. A reserved tenant name. |
+| `parent.sharedTenantName` | `shared` | The prefix of the shared mount `shared/kv`. A DNS label that is not itself reserved (`sys`, a `parent.reservedPaths` entry, …); it becomes a reserved tenant name. |
 | `parent.reservedPaths` | see above | The platform's own mount prefixes. Reserved tenant names. |
 | `parent.eso` | `enabled` | `"enabled"` or `"disabled"` — a string, not a boolean. |
-| `parent.token` | `{}` | Workload token `type`, `ttl`, `maxTTL`. **Integer seconds.** |
+| `parent.token` | `{}` | Workload token `type`, `ttl`, `maxTTL`. **Integer seconds.** `0` means Vault's default. A side not set is the tenant chart's default (`ttl` 3600, `maxTTL` 14400), and a `ttl` over the `maxTTL` fails the install. |
 | `parent.sso.*` | off | Human SSO. `enabled=true` requires `issuerUrl`; the install fails without it. |
 | `tenantValues` | `{}` | Any other tenant chart value, install-wide: `vaultCABundle`, `monitoring`, `sso.oidc.*`, `sso.roles`, `roleCaps`, `ssoToken`, … A key this chart already sets fails the render and names the value to use. |
 
 t-op-v2 pulls the **published** tenant chart, so `tenantValues` is the only way
 to set a tenant chart value on a cluster; editing the tenant chart's own
 `values.yaml` changes nothing.
+
+The schema refuses a key the charts do not read — at the top level, in
+`parent`, `templateOperator`, `kubernetesAuth`, `tenantChart`, `sync`,
+`admission`, and in `tenantValues`, `tenantValues.sso`, `.sso.oidc`,
+`.sso.oidc.clientSecretRef`, `.sso.mount`, `.ssoToken` and `.monitoring` — so
+a misspelt key fails the install instead of being ignored. It also gives each
+`tenantValues` value the type the tenant chart reads (`roleCaps` a map of
+strings, `ssoToken` duration strings, `clientSecretRef` a name and a key, …),
+so a wrong type fails the install, not every tenant's render later.
+
+### Install checks
+
+Run once after the install, and after any change to Vault outside the
+extension. The charts call no Vault API themselves, so these are the
+platform's to run:
+
+```bash
+# Vault is Community Edition: the server's version has no +ent suffix (the e2e preflight's check).
+vault status -format=json | jq -r .version
+# VCO's policy is the production one, unchanged.
+diff <(vault policy read vco-admin) charts/examples/vco-admin-policy.hcl
+# default is Vault's built-in policy: every tenant token carries it, so an edit reaches every tenant.
+vault policy read default
+```
+
+Compare the last one with the `default` policy of a fresh Vault of the same
+version (`vault server -dev`). The e2e suite proves the rest on the lab: its
+preflight refuses an Enterprise server, VCO is refused writing `vco-admin` and
+`default`, and the admission cases run.
 
 ## Trust boundary
 
@@ -325,7 +372,23 @@ vault login -method=oidc -path=<tenant>/oidc/sso role=sso.<tenant>.editor
 
 A role works only for its group, and only in its tenant: a login with another
 group's role is refused with "does not match any associated bound claim
-values". There is no fallback role: `sso.tenantRoleMapping.fallback` must stay
+values". The install fails when a group pattern (`sso.tenantGroupTemplate`, or
+a role's `sso.tenantRoleMapping.<role>.pattern`) does not hold `{tenant}`
+exactly once — one group would get that role in every tenant; give
+platform-wide access with a Vault admin policy instead — or when two roles'
+patterns can give the same group to two tenants, or to one tenant's two roles
+(`{tenant}` alone would give one group all four roles). It also fails on an
+SSO value that would fail every tenant's render later: a role without a
+`roleCaps` entry, listed twice or named `fallback`; a `roleCaps` value that is
+not one capability list, or holds `sudo`; a `tenantRoleMapping` entry other
+than `{}` or `{pattern: …}`; `fallback` other than `deny`; an empty
+`tenantGroupTemplate` or SSO mount path; a pattern with a quote, a double
+quote, a backslash or a control character such as a newline (the admission
+policies embed every pattern, and their YAML turns a newline into a space). With the default
+`{tenant}-{role}s`, roles `audit-read` and `read` would: tenant `x` as
+`audit-read` and tenant `x-audit` as `read` both bind `x-audit-reads`. Put a
+character a tenant name can't hold between `{tenant}` and the rest
+(`{tenant}.{role}`), or rename the role. There is no fallback role: `sso.tenantRoleMapping.fallback` must stay
 `deny`, because a role without a group binding would give any valid token of
 the IdP that tenant's access. A person removed from a group can't log in
 again; a token already issued lives to its TTL (`ssoToken.ttl`, default 15m).
@@ -346,8 +409,8 @@ first write. So the TemplateInstance outputs say two things per object:
 
 | Output field | Means |
 |---|---|
-| `<kind>Succeeded` | `["True"]` once the object was written to Vault at least once; `[]` means never — the one clear failure |
-| `<kind>LastError` | the message of the most recent failed reconcile, ever; it stays after the object recovers |
+| `<output>Succeeded` | `["True"]` once the object was written to Vault at least once; `[]` means never — the one clear failure |
+| `<output>LastError` | the message of the most recent failed reconcile, ever; it stays after the object recovers |
 
 The parent TI reports each tenant's kv mount (`engines…`); each tenant's child
 TI reports its auth mounts, configs, roles and policies (`authMounts…`,

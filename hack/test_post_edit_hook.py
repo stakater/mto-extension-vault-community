@@ -28,6 +28,27 @@ class PostEditHookTest(unittest.TestCase):
         r = run_hook(os.path.join(ROOT, "docs", "roadmap.md"))
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_markdown_edit_outside_the_repo_runs_nothing(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            for d in ("docs", "hack"):
+                shutil.copytree(os.path.join(ROOT, d), os.path.join(tmp, d))
+            shutil.copy(os.path.join(ROOT, "Makefile"), tmp)
+            # A broken tree, so running the checks would exit 2.
+            roadmap = os.path.join(tmp, "docs", "roadmap.md")
+            with open(roadmap, "a", encoding="utf-8") as f:
+                f.write("\n**Story C.99 — Nothing** 🔨 *In progress*\n\nDone: x.\n")
+            outside = tempfile.mkdtemp()
+            try:
+                r = run_hook(os.path.join(outside, "notes.md"), method_root=tmp)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                r = run_hook(roadmap, method_root=tmp)
+                self.assertEqual(r.returncode, 2, "the control: an edit inside the repo runs the checks")
+            finally:
+                shutil.rmtree(outside)
+        finally:
+            shutil.rmtree(tmp)
+
     def test_markdown_edit_with_a_broken_rule_exits_2(self):
         tmp = tempfile.mkdtemp()
         try:

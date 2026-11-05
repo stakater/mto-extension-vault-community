@@ -292,12 +292,23 @@ func uninstall(t *testing.T) {
 	}
 }
 
+// releaseExists reads only helm's "release: not found" as absent. Any other
+// error (a context that does not answer, an expired login) fails the run:
+// read as "absent", it skipped the uninstall and left the install in place.
 func releaseExists(t *testing.T) bool {
 	t.Helper()
 	cctx, cancel := context.WithTimeout(context.Background(), cmdTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, helmBin(), "status", releaseName, "--kube-context", kubeContext, "-n", configNS)
-	return cmd.Run() == nil
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return true
+	}
+	if strings.Contains(string(out), "release: not found") {
+		return false
+	}
+	t.Fatalf("helm status %s: %v\n%s", releaseName, err, out)
+	return false
 }
 
 // applyManifest applies YAML with kubectl, server-side, as the suite's own
@@ -502,12 +513,18 @@ func deleteTenant(t *testing.T, tenant string, namespaces ...string) {
 			t.Fatalf("delete namespace %s: %v", ns, err)
 		}
 	}
+	// Only NotFound is "gone", as in deleteTenantNamespace.
 	for _, ns := range namespaces {
 		waitFor(t, "namespace "+ns+" gone", func() string {
-			if _, err := kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); err == nil {
+			_, err := kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+			switch {
+			case err == nil:
 				return "still present"
+			case apierrors.IsNotFound(err):
+				return ""
+			default:
+				return err.Error()
 			}
-			return ""
 		})
 	}
 }

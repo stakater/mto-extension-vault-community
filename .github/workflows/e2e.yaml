@@ -58,11 +58,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      # For pull_request_review the default ref is the DEFAULT BRANCH: an
-      # approval-triggered run would test main and gate nothing.
+      # No ref: the default is the event's own commit (github.sha). For
+      # pull_request_review and pull_request that is the PR's merge commit as
+      # it was when the approval or the label came, so the run tests exactly
+      # what was approved. A ref of refs/pull/<n>/merge would be resolved at
+      # checkout time and test whatever was pushed after the approval.
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || '' }}
 
       - uses: actions/setup-go@v5
         with:
