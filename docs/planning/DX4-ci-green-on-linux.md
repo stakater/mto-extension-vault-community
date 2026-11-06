@@ -75,7 +75,7 @@ The roadmap Done line; `make verify` green with both Helm versions;
 `make mutation-test` green with the pinned Helm, as CI runs it; CI Verify and
 Kind E2E green on the PR.
 
-## Result (local; CI pending)
+## Result
 
 - Red, as CI: the render tests with Helm 3.19 failed six checks;
   `hack/test_makefile_recipes.py` failed on the Makefile (lines 493 to 499,
@@ -90,4 +90,8 @@ Kind E2E green on the PR.
   Keycloak connector).
 - `HELM=bin/helm make mutation-test` (CI's Helm): 247 mutations, 247 killed
   by their named check; the 15 new ones each by its own case.
-- Left for Done: CI Verify and Kind E2E on the PR.
+- CI on 78f969a: Verify green (`make verify` with 51 Python tests and
+  `schemaforms`; `make mutation-test` 247 of 247 killed; the version, ADR and
+  story checks), run 42216462330. Kind E2E green, the first CI run to pass:
+  the lab built on Linux, then 33 of 33 steps, 104 admission cases live, run
+  42216474137.
