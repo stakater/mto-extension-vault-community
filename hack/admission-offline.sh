@@ -143,3 +143,29 @@ EOF
 rendered default "$WORK/v-default.yaml" 26
 # custom: as default, with 2 SSO roles.
 rendered custom "$WORK/v-custom.yaml" 22
+
+# ── VCO's policy covers the render (C.23) ───────────────────────────────────
+# Every Vault path VCO writes for the CRs above must be in exactly one stanza
+# that writes, of the production policy and of the lab policy
+# (hack/vco_policy_covers.py). The default set takes them as they are; the
+# custom set with the rule charts/README.md gives for other mounts ("Vault
+# bootstrap"): kubernetes/workloads and oidc/sso replaced by the install's own
+# mounts, without the slashes around them. Without the rule, the custom set
+# fails: that was C.23.
+policypaths() { # policypaths <label> [--replace old=new ...]
+  local label=$1 d="$WORK/r-$1"; shift
+  "$YQ" e -o=json -I=0 '.' "$d"/docs/*.yml > "$d/crs.jsonl"
+  (cd "$REPO_ROOT" && "${PYTHON:-python3}" hack/vco_policy_covers.py --label "$label" \
+    --policy charts/examples/vco-admin-policy.hcl --policy hack/lab/vco-admin-policy.hcl "$@") < "$d/crs.jsonl" \
+    || exit 1
+}
+mountof() { # mountof <values file> <path key> <name key>: "<path>/<name>", as the charts trim them
+  local p n
+  p=$("$YQ" e "$2" "$1" | sed -E 's#^/+##; s#/+$##')
+  n=$("$YQ" e "$3" "$1" | sed -E 's#^/+##; s#/+$##')
+  echo "$p/$n"
+}
+policypaths default
+policypaths custom \
+  --replace "kubernetes/workloads=$(mountof "$WORK/v-custom.yaml" .kubernetesAuth.path .kubernetesAuth.name)" \
+  --replace "oidc/sso=$(mountof "$WORK/v-custom.yaml" .tenantValues.sso.mount.path .tenantValues.sso.mount.name)"

@@ -114,6 +114,18 @@ mounts and never on VCO's own `auth/kubernetes`, kv mounts without `delete`
 (deleting a tenant keeps its data, ADR-0005), and every mount's type pinned. The lab uses the
 same policy plus `delete` on the kv mounts, so its e2e teardown can finish.
 
+**Other mount paths.** The policy names the default mounts: the workload mount
+`+/kubernetes/workloads` and the SSO mount `+/oidc/sso`. With other values,
+VCO gets `deny` on every tenant's auth mounts until you change the policy:
+replace every `kubernetes/workloads` with
+`<kubernetesAuth.path>/<kubernetesAuth.name>`, and every `oidc/sso` with
+`<tenantValues.sso.mount.path>/<tenantValues.sso.mount.name>`, each without the
+slashes around it. For example, `kubernetesAuth: {path: k8s, name: apps}` gives
+`sys/auth/+/k8s/apps` and `auth/+/k8s/apps/role/kv.*`. Change nothing else.
+`make admission-offline` checks that the policy covers every Vault path VCO
+writes for the charts' render, for the default values and, with this rule,
+for other ones.
+
 **VCO's token is root-equivalent all the same.** Vault Community has no
 namespace to contain what a `kv.*` policy grants, so VCO's own policy bounds
 names, not content. Nobody but VCO may create tokens for
@@ -144,7 +156,8 @@ deletion is checked. The one exception: while `configNamespace` has no
 cluster policy refuses every write of a Kubernetes auth config, a finalizer
 update too. `admission.enabled` exists only for clusters older than 1.30;
 turning it off removes the wall. A null or commented-out `admission.enabled`
-is the default, on. `make admission-offline` runs the policies' CEL against
+is the default, on, but not on `helm upgrade --reuse-values` (see *Null and
+`--reuse-values`* below). `make admission-offline` runs the policies' CEL against
 the 109 cases of `hack/lab/admission-cases.sh` without a cluster, and against
 every VCO CR the charts render for two install value sets (it is part of
 `make verify`); a refusal counts only with its rule's message. `make
@@ -172,16 +185,27 @@ Values that matter (bootstrap chart):
 |---|---|---|
 | `configNamespace` | `vault-config` | Holds every Template, TemplateInstance and VCO CR. Install the chart into it. |
 | `vco.authPath` / `vco.role` / `vco.serviceAccount` | `kubernetes` / `vco-admin` / `vco-admin` | How VCO logs in. Must match the Vault bootstrap. There is no `vco.namespace`. |
-| `kubernetesAuth.path` / `.name` | `kubernetes` / `workloads` | The workload auth mount: `auth/<tenant>/kubernetes/workloads`. Not the SSO mount's path (`tenantValues.sso.mount`, `oidc/sso`), and not inside it or around it: the install fails. |
+| `kubernetesAuth.path` / `.name` | `kubernetes` / `workloads` | The workload auth mount: `auth/<tenant>/kubernetes/workloads`. Not the SSO mount's path (`tenantValues.sso.mount`, `oidc/sso`), and not inside it or around it: the install fails. VCO's policy names both mounts: change it with them (*Other mount paths* above). |
 | `kubernetesAuth.tokenReviewerServiceAccount` | `""` | Set only when Vault runs outside the cluster. A ServiceAccount name; a malformed one fails the install. |
 | `templateOperator.serviceAccountName` / `.namespace` | `template-operator-template-operator-v2` / `stakater-template-operator` | t-op-v2's identity, which the RBAC binds to. A name each; an empty or malformed value fails the install. |
 | `tenantChart.registry` / `.version` | `oci://ghcr.io/stakater/charts` / chart version | Where t-op-v2 pulls the tenant chart. |
 | `parent.sharedTenantName` | `shared` | The prefix of the shared mount `shared/kv`. A DNS label that is not itself reserved (`sys`, a `parent.reservedPaths` entry, …); it becomes a reserved tenant name. |
 | `parent.reservedPaths` | see above | The platform's own mount prefixes. Reserved tenant names. |
-| `parent.eso` | `enabled` | `"enabled"` or `"disabled"` — a string, not a boolean. Null is the default. |
+| `parent.eso` | `enabled` | `"enabled"` or `"disabled"` — a string, not a boolean. Null is the default, but not on `helm upgrade --reuse-values` (see below). |
 | `parent.token` | `{}` | Workload token `type`, `ttl`, `maxTTL`. **Integer seconds.** `0` means Vault's default. A side not set is the tenant chart's default (`ttl` 3600, `maxTTL` 14400), and a `ttl` over the `maxTTL` fails the install. |
 | `parent.sso.*` | off | Human SSO. `enabled=true` requires `issuerUrl`; the install fails without it. |
 | `tenantValues` | `{}` | Any other tenant chart value, install-wide: `vaultCABundle`, `monitoring`, `sso.oidc.*`, `sso.roles`, `roleCaps`, `ssoToken`, … A key this chart already sets fails the render and names the value to use. |
+
+**Null and `--reuse-values`.** A null value, or a key commented out, takes the
+chart default (`admission.enabled` on, `parent.eso` enabled). That holds for a
+values file and for `--set`, but not on `helm upgrade --reuse-values`: Helm
+then computes the value from the release's old one, and the chart never gets
+the null. With Helm 3.14.0, after `--set parent.eso=disabled`,
+`helm upgrade --reuse-values --set parent.eso=null` stores `eso: null` and
+leaves ESO off (`helm get values --all` shows `disabled`). To go back to a
+default, set the value itself (`--set parent.eso=enabled`,
+`--set admission.enabled=true`), or upgrade with all your values again and
+without `--reuse-values`.
 
 t-op-v2 pulls the **published** tenant chart, so `tenantValues` is the only way
 to set a tenant chart value on a cluster; editing the tenant chart's own

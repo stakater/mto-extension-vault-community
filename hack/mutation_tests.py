@@ -82,6 +82,11 @@ SCAFFOLD = "charts/mto-extension-vault-community/templates/01-tenant-scaffolding
 OIDC = "charts/mto-extension-vault-community/templates/06-oidc-auth.yaml"
 ESO = "charts/mto-extension-vault-community/templates/05-deployment-externalsecrets.yaml"
 PARENT_TPL = "charts/mto-extension-vault-community-bootstrap/templates/30-parent-template.yaml"
+DEX_CHECK = "hack/lab/dex-reachable.sh"
+PROD_POLICY = "charts/examples/vco-admin-policy.hcl"
+LAB_POLICY = "hack/lab/vco-admin-policy.hcl"
+COVERS = "hack/vco_policy_covers.py"
+OFFLINE = "hack/admission-offline.sh"
 POLICY_HEAD = ('  name: mto-extension-vault-community-vco-{}\nspec:\n  failurePolicy: Fail\n  matchConstraints:\n'
                '    namespaceSelector:\n      matchLabels: {{ kubernetes.io/metadata.name: {{{{ $cfg | quote }}}} }}\n'
                '    resourceRules:\n      - apiGroups: ["redhatcop.redhat.io"]\n        apiVersions: ["*"]\n'
@@ -337,6 +342,33 @@ MUTATIONS = [
     m("adr-renames", "method", "hack/check_method.py", '"--no-renames", ', "", "test_renamed_and_edited_accepted_adr_fails"),
     m("hook-boundary", "method", "hack/claude-post-edit.sh", '[ "$inside" = yes ] || exit 0', ":",
       "test_markdown_edit_outside_the_repo_runs_nothing"),
+    # ── DX.3: the lab's Dex check ──
+    m("dex-retry", "method", DEX_CHECK, '  sleep "$DEX_RETRY_SLEEP"\ndone\n', "  exit 1\ndone\n",
+      "test_retries_until_dex_answers"),
+    m("dex-give-up", "method", DEX_CHECK, ' <"$err")" >&2\n    exit 1\n', ' <"$err")" >&2\n    exit 0\n',
+      "test_gives_up_when_dex_never_answers"),
+    m("dex-issuer", "method", DEX_CHECK, """'.issuer == $i'""", "'true'", "test_wrong_issuer_fails_at_once"),
+    m("dex-timeout", "method", DEX_CHECK, "wget -T 5 -qO-", "wget -qO-", "test_each_try_has_a_timeout"),
+    # ── C.23: VCO's policy covers every path VCO writes for the render ──
+    m("policy-k8s-mount", "admission", PROD_POLICY, 'path "sys/auth/+/kubernetes/workloads" {',
+      'path "sys/auth/+/kubernetes/workload" {', "policypaths default"),
+    m("policy-sso-role", "admission", PROD_POLICY, 'path "auth/+/oidc/sso/role/sso.*" {',
+      'path "auth/+/oidc/sso/role/ssox.*" {', "policypaths default"),
+    m("policy-kv-write", "admission", PROD_POLICY, 'path "sys/policy/kv.*" {\n  capabilities = ["create", "read", "update", "delete"]',
+      'path "sys/policy/kv.*" {\n  capabilities = ["read", "delete"]', "policypaths default"),
+    m("policy-lab-role", "admission", LAB_POLICY, 'path "auth/+/kubernetes/workloads/role/kv.*" {',
+      'path "auth/+/kubernetes/workloads/role/kvx.*" {', "policypaths default"),
+    m("policy-custom-rule", "admission", OFFLINE,
+      '  --replace "oidc/sso=$(mountof "$WORK/v-custom.yaml" .tenantValues.sso.mount.path .tenantValues.sso.mount.name)"\n',
+      '  --replace "x=y"\n', "policypaths custom"),
+    m("covers-plus", "method", COVERS, '"[^/]+" if s == "+"', '".+" if s == "+"', "test_plus_matches_one_segment"),
+    m("covers-one-stanza", "method", COVERS, "                elif len(hits) > 1:\n", "                elif False:\n",
+      "test_two_stanzas_fail"),
+    m("covers-write", "method", COVERS, "                elif not (hits[0][1] & WRITE):\n", "                elif False:\n",
+      "test_read_only_is_no_write"),
+    m("covers-unknown-kind", "method", COVERS,
+      '    raise ValueError(f"{kind}: no Vault path is mapped for this kind (hack/vco_policy_covers.py)")\n',
+      "    return []\n", "test_unknown_kind_fails"),
     # ── This runner's own rules ──
     m("runner-ambiguous", "method", "hack/mutation_tests.py", '\n    if mut["count"] == 1 and n > 1:\n',
       "\n    if False:\n", "test_count_one_with_two_matches_fails"),

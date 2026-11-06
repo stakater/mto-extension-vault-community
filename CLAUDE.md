@@ -21,7 +21,7 @@ the only three differences.
 
 C.0, the live-install spike, is done (`docs/spikes/c0-findings.md`). ADRs 0001,
 0003, 0004, 0005, 0007 and 0008 are Accepted; 0007 and 0008 supersede 0002 and
-0006 (share roles on the tenant's own mount). C.1 to C.11, C.17, C.18, C.20, C.21 and DX.2 are done
+0006 (share roles on the tenant's own mount). C.1 to C.11, C.17, C.18, C.20, C.21, C.23, C.24, DX.2 and DX.3 are done
 (`docs/roadmap.md`): both charts, the admission policies, the lab, and an e2e
 suite that proves them on Vault Community 2.1.1 (`make e2e-kind`). `make
 verify` is the gate: markdownlint, relative links, the method checks, chart

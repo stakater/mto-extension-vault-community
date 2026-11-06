@@ -505,12 +505,11 @@ lab-dex: helm ## Install Dex, connected to the lab Keycloak; its config is built
 	@# A new config reaches Dex only on a restart.
 	$(KC) -n $(DEX_NS) rollout restart deploy/dex
 	$(KC) -n $(DEX_NS) rollout status deploy/dex --timeout=300s
-	@# Vault fetches the issuer's discovery document from inside its pod: prove it works there.
-	@doc=$$($(KC) -n $(VAULT_NS) exec vault-0 -- wget -qO- $(DEX_ISSUER)/.well-known/openid-configuration) \
-		|| { echo "error: the Vault pod cannot reach Dex at $(DEX_ISSUER)" >&2; exit 1; }; \
-	jq -e --arg i "$(DEX_ISSUER)" '.issuer == $$i' >/dev/null <<<"$$doc" \
-		|| { echo "error: Dex's issuer is not $(DEX_ISSUER)" >&2; exit 1; }
-	@echo "Dex answers as $(DEX_ISSUER) inside the Vault pod"
+	@# Vault fetches the issuer's discovery document from inside its pod: prove
+	@# it works there. Right after the restart a try can hit the old pod, so the
+	@# script tries again, each try with a short timeout (DX.3).
+	@KUBECTL=$(KUBECTL) CONTEXT=$(CONTEXT) VAULT_NS=$(VAULT_NS) DEX_ISSUER=$(DEX_ISSUER) \
+		./hack/lab/dex-reachable.sh
 
 # ─── E2E ─────────────────────────────────────────────────────────────
 

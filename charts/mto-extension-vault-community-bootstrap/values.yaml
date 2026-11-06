@@ -134,6 +134,8 @@ sync:
 # between tenants that Vault Community does not have: VCO's own policy bounds
 # names and mount types, not what a policy grants. Needs Kubernetes 1.30.
 # Turn off ONLY on an older cluster, knowing that it removes the wall. Null
-# (the key commented out) is the default, on.
+# (the key commented out) is the default, on; but helm upgrade --reuse-values
+# keeps the old value under a null, so set true to turn it back on
+# (charts/README.md, "Null and --reuse-values").
 admission:
   enabled: true

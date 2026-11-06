@@ -23,6 +23,13 @@
 #   - allowed_parameters pins every mount's type (P5): VCO can't mount another
 #     engine or auth method in the extension's places.
 #
+# The paths name the default mounts (kubernetesAuth.path/.name kubernetes/
+# workloads, tenantValues.sso.mount oidc/sso). With other values, replace
+# every kubernetes/workloads and oidc/sso below with the install's own
+# mounts, without the slashes around them (charts/README.md, "Other mount
+# paths"). make admission-offline checks that this policy covers every path
+# VCO writes for the charts' render.
+#
 # This policy does NOT bound what VCO can grant: a kv.* policy can say
 # anything, so VCO's token is root-equivalent (P6). The bootstrap chart's
 # admission policies check what VCO is asked, for every writer of the config

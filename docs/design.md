@@ -233,6 +233,13 @@ path "sys/policy/share.*" { capabilities = ["create", "read", "update", "delete"
 path "sys/policy/sso.*"   { capabilities = ["create", "read", "update", "delete"] }
 ```
 
+The paths name the default mounts. An install with another
+`kubernetesAuth.path`/`.name` or `tenantValues.sso.mount` needs the same policy
+with `kubernetes/workloads` and `oidc/sso` replaced by its own mounts
+(`charts/README.md`, "Vault bootstrap"); `make admission-offline` checks that
+the policy covers every path VCO writes, for the default values and for other
+ones with that rule (C.23).
+
 What this gives:
 
 - VCO **can't write its own policy** (`vco-admin`), `default`, or any

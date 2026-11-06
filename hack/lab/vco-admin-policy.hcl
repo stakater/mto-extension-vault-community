@@ -3,6 +3,8 @@
 # delete on the kv mounts, so the e2e teardown can remove the tenants' data.
 # Production denies it: deleting a tenant keeps its data (ADR-0005). The e2e
 # suite's offboarding step swaps in the production policy to prove that.
+# Its paths are the default mounts, as in production; make admission-offline
+# checks that both cover every path VCO writes (C.23).
 #
 # Vault Community has one namespace, so every path is a full path from root:
 # <tenant>/kv, shared/kv, auth/<tenant>/kubernetes/workloads,

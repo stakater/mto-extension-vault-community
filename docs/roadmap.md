@@ -293,7 +293,7 @@ a slice key render unquoted, and `ssoToken.ttl` is not compared with
 `maxTTL`. Contract parity (ADR-0001) holds without it: none of these is a
 contract change.
 
-**Story C.22 — Admission after a reinstall** 📝 *Draft*
+**Story C.22 — Admission after a reinstall** 👍 *Approved*
 
 As a platform engineer, I want the admission policies to keep working after
 an uninstall, or after `admission.enabled` goes off and on again, so that a
@@ -311,6 +311,8 @@ gets a working login until kube-apiserver restarts. A config namespace made
 before the deletion still works. The refusal is fail-closed. The e2e suite
 does not see it, because it installs once.
 
+Approved by Ayesha Arshad on 2026-11-06; the option is not chosen yet.
+
 A decision is necessary. The options:
 
 1. Keep the ConfigMap parameter. Document the fault, how to see it (the
@@ -326,11 +328,13 @@ Done: the decision is recorded (an ADR if it changes the design); on kind,
 the reproduction passes: delete and create the policy, make a new config
 namespace, install, and a workload logs in. Satisfies **AC-ISO-11**.
 
-**Story C.23 — VCO's policy for other mount paths** 📝 *Draft*
+**Story C.23 — VCO's policy for other mount paths** ✅ *Done*
 
 As a Vault admin, I want to know which paths of VCO's policy change when I
 set `kubernetesAuth.path`, `kubernetesAuth.name` or `tenantValues.sso.mount`,
 so that VCO can write the tenant mounts at the paths I chose.
+
+Approved by Ayesha Arshad on 2026-11-06.
 
 Found in the smoke run of 2026-11-06. `charts/examples/vco-admin-policy.hcl`
 and the lab policy name only `+/kubernetes/workloads` and `+/oidc/sso`. With
@@ -344,13 +348,16 @@ they are written for the defaults).
 Done: `charts/README.md`, at the values and at the policy, names the paths to
 change, or the bootstrap chart renders the policy for the install's paths; a
 render test fails when the example policy does not cover a rendered mount
-path. Satisfies **AC-ISO-7**.
+path. Satisfies **AC-ISO-7**. Planning:
+[`planning/C23-vco-policy-mount-paths.md`](planning/C23-vco-policy-mount-paths.md).
 
-**Story C.24 — A null value on `--reuse-values`** 📝 *Draft*
+**Story C.24 — A null value on `--reuse-values`** ✅ *Done*
 
 As a platform engineer, I want the docs to say that a null value on
 `helm upgrade --reuse-values` does not reset a value to its default, so that
 I do not leave ESO or the admission policies off when I mean the default.
+
+Approved by Ayesha Arshad on 2026-11-06.
 
 Found in the smoke run of 2026-11-06 with Helm 3.14.0. After
 `--set parent.eso=disabled`, `helm upgrade --reuse-values --set
@@ -361,7 +368,8 @@ behaviour applies to `admission.enabled`; not tested.
 
 Done: `charts/README.md` says it next to "Null is the default", with the two
 upgrades that reset a value: an explicit value, or all values again without
-`--reuse-values`. Satisfies **AC-ISO-11**.
+`--reuse-values`. Satisfies **AC-ISO-11**. Planning:
+[`planning/C24-null-reuse-values.md`](planning/C24-null-reuse-values.md).
 
 ---
 
@@ -413,10 +421,12 @@ checks (`make method links`) after each edit to a Markdown file; the hook is
 documented in `CLAUDE.md`. Planning:
 [`planning/DX2-method-on-every-edit.md`](planning/DX2-method-on-every-edit.md).
 
-**Story DX.3 — The lab's Dex check survives a restart** 📝 *Draft*
+**Story DX.3 — The lab's Dex check survives a restart** ✅ *Done*
 
 As an engineer, I want `make e2e-kind` to pass on a new lab, so that a red
 Kind E2E run means a defect, not a race in the lab.
+
+Approved by Ayesha Arshad on 2026-11-06.
 
 Found in the smoke run of 2026-11-06. `lab-dex` restarts Dex and then runs
 one `wget` from the Vault pod, with no timeout and no retry. The connection
@@ -426,7 +436,8 @@ again. CI runs `make e2e-kind`, so its run can fail the same way.
 
 Done: the check tries again with a short timeout on each try, for a fixed
 time, and still fails with the same message when Dex never answers; the lab
-builds from zero.
+builds from zero. Planning:
+[`planning/DX3-lab-dex-check.md`](planning/DX3-lab-dex-check.md).
 
 ---
 
