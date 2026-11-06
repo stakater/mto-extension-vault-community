@@ -1,7 +1,7 @@
 # Design
 
-**Status:** built: Phases 1 and 2 (C.1 to C.11, and C.17, the review's
-fixes) are done and proven on a live Vault Community 2.1.1 with VCO v1.0.3
+**Status:** built: Phases 1 and 2 (C.1 to C.11, and C.17, C.18, C.20 and
+C.21, the four reviews' fixes) are done and proven on a live Vault Community 2.1.1 with VCO v1.0.3
 (`make e2e-kind`); Phase 3 is Draft. Baseline Vault Community 2.1.1 and
 VCO v1.0.3. Facts are cited to `vault-community-baseline.md` by row (e.g.
 **N2**); decisions to ADRs. Verified on a live install in story C.0
@@ -146,17 +146,27 @@ Enforced four times:
     - `cluster`: a Kubernetes auth config names this cluster's API, and a CA
       equal to `kube-root-ca.crt` (V11).
 
-   Failure policy `Fail`; a deletion is never blocked: VCO's finalizer
+   Failure policy `Fail`; a deletion is not blocked: VCO's finalizer
    updates of an object being deleted pass while its spec is unchanged, or
    while neither side has a spec (a CR written with the policies off), and a
    spec changed, removed or added during a deletion is checked like any
-   other. `make verify` runs the CEL offline, through k8s.io/apiserver's own
-   admission plugin, against the 77 cases of `hack/lab/admission-cases.sh`,
+   other. The one exception: the cluster policy reads its param,
+   `kube-root-ca.crt` in `vault-config`, before its match conditions, so
+   while that ConfigMap is missing every write of a Kubernetes auth config
+   is refused (kube-controller-manager makes it in every namespace). A null
+   or commented-out `admission.enabled` is the chart default, on.
+   `make verify` runs the CEL offline, through k8s.io/apiserver's own
+   admission plugin, against the 109 cases of `hack/lab/admission-cases.sh`,
    each policy on its own, and compiles every expression as a Kubernetes 1.30
-   API server does; the e2e suite runs 74 of them on the lab, the update and
-   deletion cases on an old object created for real and held in deletion by
-   a finalizer. The 3 whose old object admission refuses (a spec out of
-   scope, or no spec) run offline only.
+   API server does. A refusal case names its rule, and counts only with that
+   rule's message: a policy reports its first failed rule only. The same run
+   sends every VCO CR that the parent and the tenant chart render with the
+   bootstrap's values, for two install value sets, through the policies as
+   admit cases. The e2e
+   suite runs 104 of the cases on the lab, the update and deletion cases on an
+   old object created for real and held in deletion by a finalizer. The 5
+   that can't be made live (an old object admission refuses, or a kind of
+   another operator the lab does not install) run offline only.
 
 The first three catch the extension's own mistakes; the fourth is the wall,
 because it holds for anyone who can write to `vault-config`. Every guard
@@ -170,7 +180,8 @@ The parent **skips** a Tenant, and lists it with the reason in ConfigMap
 
 - not a DNS label, or longer than 29 characters: the child TemplateInstance
   `mto-extension-vault-community-<tenant>.eso` is a label value, which caps at
-  63, and the tenant chart refuses the same budget. The budget is set before
+  63; the tenant chart refuses a name over its own slice's budget (33
+  characters for core, 29 for eso). The budget is set before
   the first release; lowering it later would skip tenants that rendered
   before, and they would lose their access (not their data);
 - `shared` (`parent.sharedTenantName`);
@@ -303,7 +314,7 @@ Added for Community Edition:
 | the Vault is Community Edition | install check in `charts/README.md` (the server version has no `+ent`); the e2e preflight asks the server and refuses Enterprise, the mirror of the Enterprise suite refusing Community. The charts call no Vault API themselves |
 | the tenant mount exists per tenant | `enginesSucceeded` on the parent's outputs |
 | VCO's policy is the narrowed one | install check in `charts/README.md` (a diff with `charts/examples/vco-admin-policy.hcl`); the e2e suite asserts VCO is refused a write to `sys/policy/vco-admin` and a mount of the wrong type |
-| the admission policies are in force | the e2e suite runs the 74 live cases of `hack/lab/admission-cases.sh` against the installed policies, and pins that 3 run offline only; `make verify` runs all 77 offline |
+| the admission policies are in force | the e2e suite runs the 104 live cases of `hack/lab/admission-cases.sh` against the installed policies, and pins the 5 that run offline only by name; `make verify` runs all 109 offline, and the charts' own render |
 | `default` is unchanged | every tenant token carries root's one `default` policy; the install check in `charts/README.md` compares it with a fresh Vault's, and the e2e suite proves VCO can't rewrite it |
 
 ## 9. Install requirements

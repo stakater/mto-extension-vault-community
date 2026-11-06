@@ -136,16 +136,21 @@ person:
 | `mto-extension-vault-community-vco-scope` | a policy, role or mount outside its tenant's scope: a name outside the `kv.`, `share.` and `sso.` families, a policy with a `type`, a policy line that is not a one-line `path` stanza or grants `sudo`, a path outside `<tenant>/kv/…` (or its share in `shared/kv/…`), a role not bound to exactly its own policy, its tenant's mount, its ServiceAccount and its namespace by name and tenant label, an SSO role not bound to exactly its tenant's group, a mount of another shape or at a reserved name, an OIDC config at another issuer. |
 | `mto-extension-vault-community-vco-cluster` | a Kubernetes auth config for another API or another CA than this cluster's `kube-root-ca.crt`. |
 
-Each has failure policy `Fail`. A deletion is never refused: VCO's finalizer
+Each has failure policy `Fail`. A deletion is not refused: VCO's finalizer
 updates pass while the spec is unchanged, or while neither side has a spec (a
 CR written with the policies off); a spec changed, removed or added during a
-deletion is checked. `admission.enabled` exists only for clusters older than
-1.30; turning it off removes the wall. `make admission-offline` runs the
-policies' CEL against the 77 cases of `hack/lab/admission-cases.sh` without a
-cluster (it is part of `make verify`); `make admission-test` runs 74 of them
-on the lab, the update and deletion cases on an old object it creates and
-holds in deletion. The 3 whose old object the policies refuse run offline
-only.
+deletion is checked. The one exception: while `configNamespace` has no
+`kube-root-ca.crt` (kube-controller-manager makes it in every namespace), the
+cluster policy refuses every write of a Kubernetes auth config, a finalizer
+update too. `admission.enabled` exists only for clusters older than 1.30;
+turning it off removes the wall. A null or commented-out `admission.enabled`
+is the default, on. `make admission-offline` runs the policies' CEL against
+the 109 cases of `hack/lab/admission-cases.sh` without a cluster, and against
+every VCO CR the charts render for two install value sets (it is part of
+`make verify`); a refusal counts only with its rule's message. `make
+admission-test` runs 104 of the cases on the lab, the update and deletion
+cases on an old object it creates and holds in deletion. The 5 that can't be
+made live run offline only.
 
 **Who writes to `configNamespace`.** Only Template Operator and Vault admins
 should. The policies hold for anyone who can, but a writer there can still
@@ -168,12 +173,12 @@ Values that matter (bootstrap chart):
 | `configNamespace` | `vault-config` | Holds every Template, TemplateInstance and VCO CR. Install the chart into it. |
 | `vco.authPath` / `vco.role` / `vco.serviceAccount` | `kubernetes` / `vco-admin` / `vco-admin` | How VCO logs in. Must match the Vault bootstrap. There is no `vco.namespace`. |
 | `kubernetesAuth.path` / `.name` | `kubernetes` / `workloads` | The workload auth mount: `auth/<tenant>/kubernetes/workloads`. Not the SSO mount's path (`tenantValues.sso.mount`, `oidc/sso`), and not inside it or around it: the install fails. |
-| `kubernetesAuth.tokenReviewerServiceAccount` | `""` | Set only when Vault runs outside the cluster. |
+| `kubernetesAuth.tokenReviewerServiceAccount` | `""` | Set only when Vault runs outside the cluster. A ServiceAccount name; a malformed one fails the install. |
 | `templateOperator.serviceAccountName` / `.namespace` | `template-operator-template-operator-v2` / `stakater-template-operator` | t-op-v2's identity, which the RBAC binds to. A name each; an empty or malformed value fails the install. |
 | `tenantChart.registry` / `.version` | `oci://ghcr.io/stakater/charts` / chart version | Where t-op-v2 pulls the tenant chart. |
 | `parent.sharedTenantName` | `shared` | The prefix of the shared mount `shared/kv`. A DNS label that is not itself reserved (`sys`, a `parent.reservedPaths` entry, …); it becomes a reserved tenant name. |
 | `parent.reservedPaths` | see above | The platform's own mount prefixes. Reserved tenant names. |
-| `parent.eso` | `enabled` | `"enabled"` or `"disabled"` — a string, not a boolean. |
+| `parent.eso` | `enabled` | `"enabled"` or `"disabled"` — a string, not a boolean. Null is the default. |
 | `parent.token` | `{}` | Workload token `type`, `ttl`, `maxTTL`. **Integer seconds.** `0` means Vault's default. A side not set is the tenant chart's default (`ttl` 3600, `maxTTL` 14400), and a `ttl` over the `maxTTL` fails the install. |
 | `parent.sso.*` | off | Human SSO. `enabled=true` requires `issuerUrl`; the install fails without it. |
 | `tenantValues` | `{}` | Any other tenant chart value, install-wide: `vaultCABundle`, `monitoring`, `sso.oidc.*`, `sso.roles`, `roleCaps`, `ssoToken`, … A key this chart already sets fails the render and names the value to use. |
@@ -183,13 +188,17 @@ to set a tenant chart value on a cluster; editing the tenant chart's own
 `values.yaml` changes nothing.
 
 The schema refuses a key the charts do not read — at the top level, in
-`parent`, `templateOperator`, `kubernetesAuth`, `tenantChart`, `sync`,
-`admission`, and in `tenantValues`, `tenantValues.sso`, `.sso.oidc`,
-`.sso.oidc.clientSecretRef`, `.sso.mount`, `.ssoToken` and `.monitoring` — so
-a misspelt key fails the install instead of being ignored. It also gives each
-`tenantValues` value the type the tenant chart reads (`roleCaps` a map of
-strings, `ssoToken` duration strings, `clientSecretRef` a name and a key, …),
-so a wrong type fails the install, not every tenant's render later.
+`vco`, `parent`, `parent.sso`, `parent.token`, `templateOperator`,
+`kubernetesAuth`, `tenantChart`, `sync`, `admission`, and in `tenantValues`,
+`tenantValues.sso`, `.sso.oidc`, `.sso.oidc.clientSecretRef`, `.sso.mount`,
+`.ssoToken` and `.monitoring` — so a misspelt key fails the install instead of
+being ignored. It also gives each `tenantValues` value the type the tenant
+chart reads (`roleCaps` a map of strings, `ssoToken` duration strings,
+`clientSecretRef` a name and a key, …), so a wrong type fails the install, not
+every tenant's render later. An `ssoToken.ttl` over its `maxTTL` fails the
+install too (a side not set is the tenant chart's default, 15m and 1h): Vault
+refuses such an SSO role. So does an empty `sso.roles` with SSO on, and a null
+`kubernetesAuth.kubernetesHost` or `tenantChart.version`.
 
 ### Install checks
 

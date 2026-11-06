@@ -53,8 +53,8 @@ root (C.0 Q16).
 
 **AC-ISO-8 — Names that would break the scope are refused.** *(R)* Tenants
 `sys`, `auth`, `identity`, `cubbyhole`, `agent-registry`, `shared`, `secret`,
-`Team_A` and a 30-character name get no mount and no child TI; each is listed with its
-reason in the skipped-tenants ConfigMap.
+`has.dot` and a 30-character name get no mount and no child TI; each is listed
+with its reason in the skipped-tenants ConfigMap.
 
 **AC-ISO-9 — No role administers Vault.** *(L)* `erin` (admin) is refused
 `sys/policy/x`, `sys/mounts/x`, `auth/team-a/kubernetes/workloads/role/x`.
@@ -74,13 +74,15 @@ claims, a mount or auth config of another shape, cluster or CA, a kind the
 extension does not render, a `spec.connection`, another
 `spec.authentication`, a CR without a spec, a spec widened, removed or put
 back with a connection during a deletion, an update that adds a connection —
-is refused by the rule of the policy the case names, and by no other, each
-paired with its admitted twin. Each case runs as a person, except 4 origin
-cases, which run as Template Operator; offline in `make verify` (`make
-admission-offline`, all 77 cases), and live on the lab (`make admission-test`,
-the e2e suite: 74 cases, the update and deletion cases on an old object
-created for real and held in deletion; the 3 whose old object the policies
-refuse run offline only, and the e2e pins that split).
+is refused by the rule the case names, with that rule's message, and by no
+other policy. Each case runs as a person, except 6 cases, which run as
+Template Operator; offline in `make verify` (`make admission-offline`, all 109
+cases, and every VCO CR the charts render for two install value sets), and
+live on the lab (`make admission-test`, the e2e suite: 104 cases, the update
+and deletion cases on an old object created for real and held in deletion;
+the 5 that can't be made live — an old object the policies refuse, or a kind
+of another operator the lab does not install — run offline only, and the e2e
+pins them by name).
 
 **AC-ISO-12 — Template Operator can't write for a tenant.** *(R+L)* A Template
 and TemplateInstance in `team-a-api` whose object names

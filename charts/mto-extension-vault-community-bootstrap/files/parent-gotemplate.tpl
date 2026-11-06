@@ -9,7 +9,7 @@
        namespaces, so there is no namespace and no targetNamespace: every
        object lands in Vault's one namespace, at a path that starts with the
        tenant's name. */ -}}
-{{- $auth := printf "path: %s\n    role: %s\n    serviceAccount:\n      name: %s" .parameters.vcoAuthPath .parameters.vcoRole .parameters.vcoServiceAccount }}
+{{- $auth := printf "path: %s\n    role: %s\n    serviceAccount:\n      name: %s" (.parameters.vcoAuthPath | quote) (.parameters.vcoRole | quote) (.parameters.vcoServiceAccount | quote) }}
 {{- /* Namespaces per tenant, counted from the <tenantLabel> label: the ONLY
        fact MTO and this chart both agree on. MTO puts that label on a
        namespace whether it is listed in the Tenant spec or adopted by label,
@@ -29,7 +29,8 @@
          - a name longer than 29 characters: the child TI's name
            mto-extension-vault-community-<tenant>.eso is stamped as a label
            value on every object it renders, and a label value caps at 63
-           (the tenant chart fails the render at the same budget). One budget
+           (the tenant chart fails the render over its own slice's budget,
+           33 characters for core and 29 for .eso). One budget
            whether ESO is on or off, so turning ESO on never skips a tenant
            that had its mount. Rendered, the tenant got its mount and a failed
            child, and was listed nowhere;
@@ -100,7 +101,7 @@ spec:
 ---
 apiVersion: redhatcop.redhat.io/v1alpha1
 kind: SecretEngineMount
-metadata: { name: {{ printf "%s-kv" $name | quote }}, namespace: {{ $cfgNs | quote }}, labels: { {{ $tenantLabel }}: {{ $name | quote }} } }
+metadata: { name: {{ printf "%s-kv" $name | quote }}, namespace: {{ $cfgNs | quote }}, labels: { {{ $tenantLabel | quote }}: {{ $name | quote }} } }
 spec:
   authentication:
     {{ $auth }}
@@ -146,7 +147,7 @@ spec:
           jsonPath: .items
           namespaceSelector:
             matchLabels:
-              {{ $tenantLabel }}: {{ $name | quote }}
+              {{ $tenantLabel | quote }}: {{ $name | quote }}
     - name: deployments
       valueFrom:
         objectFieldRef:
@@ -155,7 +156,7 @@ spec:
           jsonPath: .items
           namespaceSelector:
             matchLabels:
-              {{ $tenantLabel }}: {{ $name | quote }}
+              {{ $tenantLabel | quote }}: {{ $name | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

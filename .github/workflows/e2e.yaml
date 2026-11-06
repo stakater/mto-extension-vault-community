@@ -27,6 +27,20 @@ jobs:
     permissions:
       pull-requests: write
     steps:
+      # An approval is for one commit (review.commit_id). The e2e job tests
+      # the PR as it was when the event came, so a push between the review
+      # page loading and the approval would run code nobody approved: the
+      # approval must be for the head commit.
+      - name: The approval is for the head commit
+        if: ${{ github.event_name == 'pull_request_review' }}
+        env:
+          APPROVED: ${{ github.event.review.commit_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -z "$APPROVED" ] || [ "$APPROVED" != "$HEAD_SHA" ]; then
+            echo "::error::the approval is for '$APPROVED', but the PR's head is '$HEAD_SHA': approve the head commit to run the suite"
+            exit 1
+          fi
       # Removed so the next run needs a fresh request. Pinned by SHA: this job
       # holds pull-requests: write.
       - name: Remove the test label
@@ -60,9 +74,10 @@ jobs:
     steps:
       # No ref: the default is the event's own commit (github.sha). For
       # pull_request_review and pull_request that is the PR's merge commit as
-      # it was when the approval or the label came, so the run tests exactly
-      # what was approved. A ref of refs/pull/<n>/merge would be resolved at
-      # checkout time and test whatever was pushed after the approval.
+      # it was when the approval or the label came; verify-label refuses an
+      # approval of another commit than that head, so the run tests what was
+      # approved. A ref of refs/pull/<n>/merge would be resolved at checkout
+      # time and test whatever was pushed after the approval.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5

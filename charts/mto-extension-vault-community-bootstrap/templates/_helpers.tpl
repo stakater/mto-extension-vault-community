@@ -14,13 +14,23 @@ values.schema.json, and they give files/parent-gotemplate.tpl (rendered by
 t-op-v2, where this chart's validation cannot reach) the guarantee that its
 parameters are only ever "true"/"false" or "enabled"/"disabled".
 
+A null or absent toggle is the chart default, which every caller names
+(`default`): Helm deletes a key set to null before the schema sees it, so a
+values file with `admission:` and its child commented out must not turn the
+admission policies off. The precedent is templateSync: absent or null is the
+chart default.
+
 Never compare .Values.<toggle> directly — go through the named helper.
+Usage: include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" "admission.enabled" "value" $v "default" "true")
 */}}
 {{- define "mto-extension-vault-community-bootstrap.boolValue" -}}
 {{- $raw := .value -}}
 {{- $s := "" -}}
+{{- if not (has (toString .default) (list "true" "false")) -}}
+{{- fail (printf "boolValue %s: the caller names no default (true or false)" .name) -}}
+{{- end -}}
 {{- if kindIs "invalid" $raw -}}
-{{- $s = "false" -}}
+{{- $s = toString .default -}}
 {{- else -}}
 {{- $s = toString $raw -}}
 {{- end -}}
@@ -31,10 +41,11 @@ Never compare .Values.<toggle> directly — go through the named helper.
 {{- end -}}
 
 {{- define "mto-extension-vault-community-bootstrap.esoMode" -}}
-{{- $raw := .Values.parent.eso -}}
+{{- $raw := (.Values.parent | default dict).eso -}}
 {{- $s := "" -}}
+{{- /* Null or absent: the chart default (values.yaml parent.eso). */ -}}
 {{- if kindIs "invalid" $raw -}}
-{{- $s = "disabled" -}}
+{{- $s = "enabled" -}}
 {{- else -}}
 {{- $s = toString $raw -}}
 {{- end -}}
@@ -52,7 +63,7 @@ Never compare .Values.<toggle> directly — go through the named helper.
 
 {{- define "mto-extension-vault-community-bootstrap.ssoEnabled" -}}
 {{- $sso := include "mto-extension-vault-community-bootstrap.parentSso" . | fromYaml -}}
-{{- include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" "parent.sso.enabled" "value" $sso.enabled) -}}
+{{- include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" "parent.sso.enabled" "value" $sso.enabled "default" "false") -}}
 {{- end -}}
 
 {{/*
@@ -232,7 +243,9 @@ Usage: {{ include "mto-extension-vault-community-bootstrap.tenantFeature" (dict 
 {{- define "mto-extension-vault-community-bootstrap.tenantFeature" -}}
 {{- $f := get (.ctx.Values.tenantValues | default dict) .feature | default dict -}}
 {{- $v := ternary (get $f "enabled") nil (hasKey $f "enabled") -}}
-{{- include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" (printf "tenantValues.%s.enabled" .feature) "value" $v) -}}
+{{- /* Absent or null: the tenant chart's default, off (vault.on; pinned by
+       tenantvaluekeys). */ -}}
+{{- include "mto-extension-vault-community-bootstrap.boolValue" (dict "name" (printf "tenantValues.%s.enabled" .feature) "value" $v "default" "false") -}}
 {{- end -}}
 
 {{/*
@@ -281,6 +294,55 @@ Pinned to the tenant chart by the render test tenantvaluekeys.
 {{- end -}}
 
 {{/*
+The tenant chart's default SSO token ttl and maxTTL (values.yaml ssoToken.*),
+its default SSO mount (sso.mount) and its default group pattern
+(sso.tenantGroupTemplate). Pinned to the tenant chart by the render test
+tenantvaluekeys.
+*/}}
+{{- define "mto-extension-vault-community-bootstrap.defaultSsoToken" -}}
+{{- toYaml (dict "ttl" "15m" "maxTTL" "1h") -}}
+{{- end -}}
+{{- define "mto-extension-vault-community-bootstrap.defaultSsoMount" -}}
+{{- toYaml (dict "path" "oidc" "name" "sso") -}}
+{{- end -}}
+{{- define "mto-extension-vault-community-bootstrap.defaultGroupTemplate" -}}
+{tenant}-{role}s
+{{- end -}}
+
+{{/*
+A Vault duration in seconds, for a comparison: what Vault's parseutil reads
+from a role's ttl. A number or a string of digits is seconds; "<n>d" is days;
+otherwise a Go duration of numbers and units h, m, s, ms, us, µs, μs, ns
+("1h30m", "1.5h", ".5h", "+20m"). Null, "" and 0 are Vault's default and give
+0. Anything else (a negative value too) fails, naming the value. The tenant chart's vault.durationSeconds is the
+same; the render test ssotoken runs one table through both.
+Usage: include "mto-extension-vault-community-bootstrap.durationSeconds" (dict "name" "x" "value" $v)
+*/}}
+{{- define "mto-extension-vault-community-bootstrap.durationSeconds" -}}
+{{- $s := ternary "" (toString .value) (kindIs "invalid" .value) -}}
+{{- /* A number as Go's time.ParseDuration reads one: 1, 1.5, 1. or .5. */ -}}
+{{- $num := "([0-9]+([.][0-9]*)?|[.][0-9]+)" -}}
+{{- $units := "(h|ms|m|s|us|µs|μs|ns)" -}}
+{{- if or (eq $s "") (eq $s "0") -}}
+0
+{{- else if regexMatch "^[+]?[0-9]+$" $s -}}
+{{- trimPrefix "+" $s -}}
+{{- else if regexMatch "^[+]?[0-9]+d$" $s -}}
+{{- mul (atoi (trimSuffix "d" (trimPrefix "+" $s))) 86400 -}}
+{{- else if regexMatch (printf "^[+]?(%s%s)+$" $num $units) $s -}}
+{{- $unit := dict "h" 3600.0 "m" 60.0 "s" 1.0 "ms" 0.001 "us" 0.000001 "µs" 0.000001 "μs" 0.000001 "ns" 0.000000001 -}}
+{{- $sum := 0.0 -}}
+{{- range $part := regexFindAll (printf "%s%s" $num $units) $s -1 -}}
+{{- $u := regexFind (printf "%s$" $units) $part -}}
+{{- $sum = addf $sum (mulf (float64 (trimSuffix $u $part)) (get $unit $u)) -}}
+{{- end -}}
+{{- $sum -}}
+{{- else -}}
+{{- fail (printf "%s %q is not a duration Vault reads: whole seconds (900), days (2d), or numbers with h, m, s (1h30m)" .name $s) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 The SSO roles and the group pattern of each, resolved as the tenant chart's
 07-sso-policies.yaml and vault.ssoGroup resolve them, and validated once at
 install: in the tenant chart a bad value fails every tenant's render while
@@ -306,9 +368,15 @@ Returns a YAML list of {role, pattern}.
 {{- $tv := .Values.tenantValues | default dict -}}
 {{- $tsso := $tv.sso | default dict -}}
 {{- $defaultRoles := include "mto-extension-vault-community-bootstrap.defaultRoles" . | fromYamlArray -}}
-{{- $roles := $tsso.roles | default $defaultRoles -}}
+{{- $roles := $defaultRoles -}}
+{{- if hasKey $tsso "roles" -}}
+{{- $roles = $tsso.roles -}}
+{{- end -}}
 {{- if not (kindIs "slice" $roles) -}}
 {{- fail (printf "tenantValues.sso.roles must be a list of role names — got %v" $roles) -}}
+{{- end -}}
+{{- if and (eq (len $roles) 0) (eq (include "mto-extension-vault-community-bootstrap.ssoEnabled" .) "true") -}}
+{{- fail "tenantValues.sso.roles is empty: with SSO on, every tenant would get an OIDC mount and no role to log in with. Remove it to use the tenant chart's roles" -}}
 {{- end -}}
 {{- $roleCaps := $tv.roleCaps | default dict -}}
 {{- $capRoles := concat $defaultRoles (keys $roleCaps) -}}
@@ -334,9 +402,9 @@ Returns a YAML list of {role, pattern}.
 {{- end -}}
 {{- end -}}
 {{- if and (hasKey $tsso "tenantGroupTemplate") (not $tsso.tenantGroupTemplate) -}}
-{{- fail "tenantValues.sso.tenantGroupTemplate is set but empty: the tenant chart then has no pattern for a role. Remove it to use {tenant}-{role}s" -}}
+{{- fail (printf "tenantValues.sso.tenantGroupTemplate is set but empty: the tenant chart then has no pattern for a role. Remove it to use %s" (include "mto-extension-vault-community-bootstrap.defaultGroupTemplate" .)) -}}
 {{- end -}}
-{{- $default := toString ($tsso.tenantGroupTemplate | default "{tenant}-{role}s") -}}
+{{- $default := toString ($tsso.tenantGroupTemplate | default (include "mto-extension-vault-community-bootstrap.defaultGroupTemplate" .)) -}}
 {{- $out := list -}}
 {{- $seen := dict -}}
 {{- range $r := $roles -}}
@@ -474,6 +542,9 @@ installvalues.
       (list "parent.tenantLabelKey" .Values.parent.tenantLabelKey "^([a-z0-9]([-a-z0-9]*[a-z0-9])?([.][a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$")
       (list "kubernetesAuth.path" (trimAll "/" (toString .Values.kubernetesAuth.path)) $mountPath)
       (list "kubernetesAuth.name" (trimAll "/" (toString .Values.kubernetesAuth.name)) $mountPath) -}}
+{{- with .Values.kubernetesAuth.tokenReviewerServiceAccount -}}
+{{- $checks = append $checks (list "kubernetesAuth.tokenReviewerServiceAccount" . $sub) -}}
+{{- end -}}
 {{- range $k := list "path" "name" -}}
 {{- if hasKey $ssoMount $k -}}
 {{- $checks = append $checks (list (printf "tenantValues.sso.mount.%s" $k) (trimAll "/" (toString (get $ssoMount $k))) $mountPath) -}}
@@ -483,6 +554,14 @@ installvalues.
 {{- $v := toString (index $c 1 | default "") -}}
 {{- if not (regexMatch (index $c 2) $v) -}}
 {{- fail (printf "%s %q is not a valid name (%s): the admission policies match on it, and a wrong or empty value makes a check match nothing or fails every tenant" (index $c 0) $v (index $c 2)) -}}
+{{- end -}}
+{{- end -}}
+{{- /* Null deletes a key before the schema sees it, so its minLength
+       never runs: an empty host breaks the cluster policy's CEL, an empty
+       version makes every child Template pull another chart. */ -}}
+{{- range $c := list (list "kubernetesAuth.kubernetesHost" .Values.kubernetesAuth.kubernetesHost) (list "tenantChart.version" (.Values.tenantChart | default dict).version) -}}
+{{- if not (index $c 1) -}}
+{{- fail (printf "%s must be set" (index $c 0)) -}}
 {{- end -}}
 {{- end -}}
 {{- if or (contains "'" (toString .Values.vco.role)) (contains "\\" (toString .Values.vco.role)) (not .Values.vco.role) -}}
@@ -515,9 +594,25 @@ installvalues.
        so the Kubernetes and SSO mounts of a tenant are two paths, neither
        under the other; otherwise every tenant loses one of its logins. */ -}}
 {{- $k8s := printf "%s/%s" (trimAll "/" (toString .Values.kubernetesAuth.path)) (trimAll "/" (toString .Values.kubernetesAuth.name)) -}}
-{{- $sso := printf "%s/%s" (trimAll "/" (toString ($ssoMount.path | default "oidc"))) (trimAll "/" (toString ($ssoMount.name | default "sso"))) -}}
+{{- $ssoDefault := include "mto-extension-vault-community-bootstrap.defaultSsoMount" . | fromYaml -}}
+{{- $sso := printf "%s/%s" (trimAll "/" (toString ($ssoMount.path | default $ssoDefault.path))) (trimAll "/" (toString ($ssoMount.name | default $ssoDefault.name))) -}}
 {{- if or (eq $k8s $sso) (hasPrefix (printf "%s/" $k8s) $sso) (hasPrefix (printf "%s/" $sso) $k8s) -}}
 {{- fail (printf "kubernetesAuth (auth/<tenant>/%s) and tenantValues.sso.mount (auth/<tenant>/%s) are one path, or one is inside the other: Vault mounts one of them only, and every tenant loses that login. Give each its own path" $k8s $sso) -}}
+{{- end -}}
+{{- /* The SSO token: Vault refuses an SSO role whose ttl is over its max
+       ttl. A side that is not set is the tenant chart's default (15m, 1h);
+       0 is Vault's default and is not compared. */ -}}
+{{- $stok := (.Values.tenantValues | default dict).ssoToken | default dict -}}
+{{- $seff := include "mto-extension-vault-community-bootstrap.defaultSsoToken" . | fromYaml -}}
+{{- range $k := list "ttl" "maxTTL" -}}
+{{- if and (hasKey $stok $k) (not (kindIs "invalid" (get $stok $k))) -}}
+{{- $_ := set $seff $k (get $stok $k) -}}
+{{- end -}}
+{{- end -}}
+{{- $sttl := include "mto-extension-vault-community-bootstrap.durationSeconds" (dict "name" "tenantValues.ssoToken.ttl" "value" $seff.ttl) -}}
+{{- $smax := include "mto-extension-vault-community-bootstrap.durationSeconds" (dict "name" "tenantValues.ssoToken.maxTTL" "value" $seff.maxTTL) -}}
+{{- if and (gt (float64 $smax) 0.0) (gt (float64 $sttl) (float64 $smax)) -}}
+{{- fail (printf "tenantValues.ssoToken.ttl %q is over tenantValues.ssoToken.maxTTL %q (a side not set is the tenant chart's default, ttl 15m and maxTTL 1h): Vault refuses an SSO role whose ttl is over its max ttl, so every tenant's SSO would fail" (toString $seff.ttl) (toString $seff.maxTTL)) -}}
 {{- end -}}
 {{- $_ := include "mto-extension-vault-community-bootstrap.ssoPatterns" . -}}
 {{- end -}}

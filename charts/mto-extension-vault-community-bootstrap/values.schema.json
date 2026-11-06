@@ -331,7 +331,7 @@
                 "type": "string"
               },
               "uniqueItems": true,
-              "description": "The SSO roles. Each once: a role listed twice renders its Vault role twice."
+              "description": "The SSO roles. Each once: a role listed twice renders its Vault role twice. With SSO on, not empty (the ssoPatterns helper): SSO with no role has no login."
             },
             "audience": {
               "description": "Removed: its guard names the fix."

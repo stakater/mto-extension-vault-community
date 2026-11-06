@@ -48,13 +48,19 @@ const (
 	coreNS  = "e2e-core"
 )
 
-// The cases of hack/lab/admission-cases.sh (CASES in hack/admission-offline.sh)
-// and how many of them run offline only: their old object (a spec out of
-// scope, or no spec) can't be created while admission is on.
-const (
-	admissionCases       = 77
-	admissionOfflineOnly = 3
-)
+// The number of cases of hack/lab/admission-cases.sh (CASES in
+// hack/admission-offline.sh), and the ones that run offline only, by
+// description: their old object (a spec out of scope, or no spec) can't be
+// created while admission is on, or the lab installs no CRD of their kind.
+const admissionCases = 109
+
+var admissionOfflineCases = []string{
+	"a spec with a connection put back during a deletion",
+	"a finalizer removed during a deletion, the spec unchanged",
+	"a finalizer removed during a deletion of a CR without a spec",
+	"a cluster-scoped redhatcop.redhat.io object of another operator",
+	"a cluster-scoped object of another operator, written by Template Operator",
+}
 
 // e2eTenants are every tenant the suite creates, for the preflight's cleanup.
 var e2eTenants = []string{alpha, beta, prefixT}
@@ -778,10 +784,9 @@ func TestE2E(t *testing.T) {
 
 	step("admission: out-of-scope VCO CRs are refused at the API server", func(t *testing.T) {
 		// AC-ISO-11. The same cases make admission-test runs: server-side dry
-		// runs in the config namespace, each refusal one field away from an
-		// admitted object. An update case creates its old object for real
-		// (and VCO deletes it in Vault afterwards), so the run is longer than
-		// one command.
+		// runs in the config namespace, each refusal by the one rule it names.
+		// An update case creates its old object for real (and VCO deletes it
+		// in Vault afterwards), so the run is longer than one command.
 		cctx, cancel := context.WithTimeout(context.Background(), 4*cmdTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(cctx, "bash", "../../hack/lab/admission-cases.sh")
@@ -800,16 +805,29 @@ func TestE2E(t *testing.T) {
 			t.Fatalf("admission cases: %v\n%s", err, out)
 		}
 		// The split is pinned: a case that silently became offline only (or
-		// a live one lost) changes the result line. hack/admission-offline.sh
-		// pins the total.
-		want := fmt.Sprintf("== result: %d cases, 0 failed, %d offline only", admissionCases, admissionOfflineOnly)
+		// a live one lost) changes the result line, and each offline-only
+		// case is named. hack/admission-offline.sh pins the total.
+		offline := len(admissionOfflineCases)
+		want := fmt.Sprintf("== result: %d cases, 0 failed, %d offline only", admissionCases, offline)
 		if !strings.Contains(out, want) || strings.Contains(out, "FAIL ") {
 			t.Fatalf("admission cases: want %q\n%s", want, out)
 		}
-		if got := strings.Count(out, "PASS "); got != admissionCases-admissionOfflineOnly {
-			t.Fatalf("admission cases: %d passed live, want %d\n%s", got, admissionCases-admissionOfflineOnly, out)
+		if got := strings.Count(out, "PASS "); got != admissionCases-offline {
+			t.Fatalf("admission cases: %d passed live, want %d\n%s", got, admissionCases-offline, out)
 		}
-		t.Logf("%d admission cases passed live, %d offline only", admissionCases-admissionOfflineOnly, admissionOfflineOnly)
+		var skipped []string
+		for _, l := range strings.Split(out, "\n") {
+			if strings.HasPrefix(l, "SKIP  offline only (") {
+				skipped = append(skipped, l[strings.Index(l, "): ")+3:])
+			}
+		}
+		slices.Sort(skipped)
+		wantSkipped := slices.Clone(admissionOfflineCases)
+		slices.Sort(wantSkipped)
+		if !slices.Equal(skipped, wantSkipped) {
+			t.Fatalf("admission cases: offline only %q, want %q\n%s", skipped, wantSkipped, out)
+		}
+		t.Logf("%d admission cases passed live, %d offline only", admissionCases-offline, offline)
 	})
 
 	step("admission: a tenant's Template can't make Template Operator write into the config namespace", func(t *testing.T) {
@@ -1195,6 +1213,11 @@ spec:
 			"metadata":   map[string]any{"name": held, "namespace": configNS},
 			"spec":       spec,
 		}}
+		// e2e-beta's namespace of the same name first: VCO's first look at
+		// the held role then finds a namespace of that name with another
+		// tenant's label, not no namespace at all.
+		createTenant(t, beta, reuseNS)
+		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		if _, err := dyn.Resource(roleGVR).Namespace(configNS).Create(ctx, heldRole, metav1.CreateOptions{}); err != nil {
 			t.Fatalf("write e2e-alpha's role spec as the suite's own CR (it passes admission like the chart's): %v", err)
 		}
@@ -1207,8 +1230,6 @@ spec:
 				return ""
 			})
 		})
-		createTenant(t, beta, reuseNS)
-		createServiceAccount(t, reuseNS, "app", map[string]string{annPrefix + "kv": "true", annPrefix + "role": "editor"})
 		waitVCO(t, "kubernetesauthengineroles", held)
 		// The role is in Vault, and VCO bound it to no namespace: the selector
 		// names the namespace by name AND e2e-alpha's label, and the namespace
@@ -1233,8 +1254,11 @@ spec:
 			if bad != "" {
 				return bad
 			}
-			if slices.Contains(ns, reuseNS) {
-				return fmt.Sprintf("still bound to %v", ns)
+			// VCO writes __no_namespace__ when the selector matches none
+			// (baseline V10); a field missing or renamed decodes to nil and
+			// must not read as "unbound".
+			if !slices.Equal(ns, []string{"__no_namespace__"}) {
+				return fmt.Sprintf("bound to %v, want [__no_namespace__]", ns)
 			}
 			return ""
 		})

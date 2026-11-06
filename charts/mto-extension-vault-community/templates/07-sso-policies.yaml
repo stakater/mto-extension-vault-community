@@ -48,6 +48,16 @@ Role ladder (most → least privilege):
 {{- range $uri := $.Values.sso.allowedRedirectUris }}
 {{- $redirects = append $redirects (replace "{tenant}" $tenant (toString $uri)) }}
 {{- end }}
+{{- if not .Values.sso.roles }}
+{{- fail "sso.enabled=true with an empty sso.roles: the tenant would get an OIDC mount and no role to log in with. Remove sso.roles to use the chart's roles" }}
+{{- end }}
+{{- /* Vault refuses an SSO role whose ttl is over its max ttl; 0 is Vault's
+       default and is not compared. */ -}}
+{{- $sttl := include "vault.durationSeconds" (dict "name" "ssoToken.ttl" "value" .Values.ssoToken.ttl) }}
+{{- $smax := include "vault.durationSeconds" (dict "name" "ssoToken.maxTTL" "value" .Values.ssoToken.maxTTL) }}
+{{- if and (gt (float64 $smax) 0.0) (gt (float64 $sttl) (float64 $smax)) }}
+{{- fail (printf "ssoToken.ttl %q is over ssoToken.maxTTL %q: Vault refuses an SSO role whose ttl is over its max ttl, so every SSO login of the tenant would fail" (toString .Values.ssoToken.ttl) (toString .Values.ssoToken.maxTTL)) }}
+{{- end }}
 {{- $groups := dict }}
 {{- range $role := $.Values.sso.roles }}
 {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" (toString $role)) }}{{ fail (printf "sso.roles entry %q is not a DNS label — it is a part of the dot-joined Vault role name sso.<tenant>.<role>" $role) }}{{ end }}

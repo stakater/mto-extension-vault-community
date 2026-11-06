@@ -69,12 +69,15 @@ Tests and tools:
 
 - `hack/mutation_tests.py`: a `count=1` mutation must match exactly once;
   a FAIL line with "failed elsewhere" or a template crash is a kill only when
-  it holds the mutation's `detail` (its own case); `quote-ns`,
-  `cel-kinds-delete` and `dns-regex-respelt` anchored on one match; the six
+  it holds the mutation's `detail` (its own case); `cel-kinds-delete` and
+  `dns-regex-respelt` anchored on one match (`quote-ns` replaces all three
+  of its matches, `count="all"`); the six
   mutations killed by another guard's message get a case only their guard
   refuses. A unit test (`hack/test_mutation_tests.py`) pins both rules.
 - `hack/chart-render-tests.sh`: the bootstrap and the parent render at setup,
-  so a parse error stops the run before any check.
+  so a parse error stops the run before any check. (Not true at the time:
+  `ssogroups` rendered the bootstrap before the setup render. C.21 moved the
+  setup render up.)
 - `hack/lab/admission-cases.sh`: in live mode an update case creates its old
   object for real, holds it in deletion with a finalizer when the case needs
   that, and sends the update as a server-side dry run; only the cases whose
@@ -122,8 +125,9 @@ it runs offline only. An audience on `vco-admin` (C.17).
   the split, 74 live and 3 offline only.
 - Seen on the lab, not fixed here: `make admission-test` run at once after a
   fresh `make lab-bootstrap` admitted its first case, before the API server
-  had loaded the new policies; the next run was green. It can only give a
-  false failure, never a false pass.
+  had loaded the new policies; the next run was green. Right after an
+  install it can only give a false failure; right after an upgrade it can
+  also pass on the old policies (C.21). The e2e suite uninstalls first.
 
 ## Done means
 

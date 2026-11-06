@@ -56,7 +56,7 @@ spec:
     # How the parent's VCO CRs log in. The child Templates stamp the same
     # values into every tenant.
     - name: vcoAuthPath
-      value: {{ .Values.vco.authPath | quote }}
+      value: {{ trimAll "/" (toString .Values.vco.authPath) | quote }}
     - name: vcoRole
       value: {{ .Values.vco.role | quote }}
     - name: vcoServiceAccount

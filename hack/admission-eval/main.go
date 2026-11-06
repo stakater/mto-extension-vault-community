@@ -15,17 +15,23 @@
 //
 //	# want: admit | refuse
 //	# policy: <the policy that must refuse>   (refuse only)
+//	# message: <text of the rule's message>   (refuse only)
 //	# what: <description>
 //	# as: <username>           (optional; default a person, "kubernetes-admin")
+//	# scope: cluster           (optional; a cluster-scoped object, no namespace)
 //	---
 //	<object>
 //
 // Each policy runs on its own, so the result does not depend on the order in
 // which the API server reports denials (it reports the first). An "admit"
-// case passes when no policy refuses; a "refuse" case when the named policy
-// refuses by one of its validations — not because it failed to compile,
-// configure or evaluate, or ran out of cost budget — and no other policy
-// refuses, so the live run reports the same policy.
+// case passes when no policy refuses. A "refuse" case passes when the named
+// policy refuses by one of its validations — not because it failed to
+// compile, configure or evaluate, or ran out of cost budget — with the rule's
+// message, and no other policy refuses, so the live run reports the same
+// policy and rule. A policy reports its first failed validation only, so the
+// message names the one rule that refused. A failed case's line says why:
+// admitted, refused on an evaluation error, refused by another rule, or also
+// refused by another policy.
 //
 // Before any case, every expression of every policy is compiled as a
 // Kubernetes 1.30 API server compiles a new policy (environment
@@ -176,8 +182,56 @@ func compileErrors(policy *admissionregistrationv1.ValidatingAdmissionPolicy) []
 }
 
 type testCase struct {
-	file, want, policy, what, as string
-	obj, old                     *unstructured.Unstructured
+	file, want, policy, message, what, as, scope string
+	obj, old                                     *unstructured.Unstructured
+}
+
+// countError is the failure for a case directory with another number of
+// cases than the caller pinned, or "".
+func countError(got, want int, dir string) string {
+	if got == want {
+		return ""
+	}
+	return fmt.Sprintf("FAIL  infra — %d cases in %s, want exactly %d: a case was lost or added without the count", got, dir, want)
+}
+
+// oneLine is an error's text on one line: a policy's expressions keep their
+// newlines, and a denial that quotes one would end the result line early, out
+// of reach of anything that reads it (hack/mutation_tests.py).
+func oneLine(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
+	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
+// verdict is one case's result line and whether it passed, from the denials
+// each policy gave (names: every policy, sorted).
+func verdict(c testCase, denials map[string]error, names []string) (string, bool) {
+	var others []string
+	for _, n := range names {
+		if denials[n] != nil && n != c.policy {
+			others = append(others, fmt.Sprintf("%s: %s", n, oneLine(denials[n])))
+		}
+	}
+	if c.want == "admit" {
+		if len(denials) == 0 {
+			return fmt.Sprintf("PASS  admit:  %s", c.what), true
+		}
+		return fmt.Sprintf("FAIL  admit: %s (%s): refused by %s", c.what, c.file, strings.Join(others, "; ")), false
+	}
+	d := denials[c.policy]
+	switch {
+	case d == nil:
+		return fmt.Sprintf("FAIL  refuse: %s (%s): admitted by %s", c.what, c.file, c.policy), false
+	case !refusedByPolicy(d):
+		return fmt.Sprintf("FAIL  refuse: %s (%s): refused by %s on an evaluation error, not by a rule: %s", c.what, c.file, c.policy, oneLine(d)), false
+	case !strings.Contains(d.Error(), c.message):
+		return fmt.Sprintf("FAIL  refuse: %s (%s): refused by %s by another rule, not %q: %s", c.what, c.file, c.policy, c.message, oneLine(d)), false
+	case len(others) > 0:
+		return fmt.Sprintf("FAIL  refuse: %s (%s): also refused by %s", c.what, c.file, strings.Join(others, "; ")), false
+	}
+	return fmt.Sprintf("PASS  refuse: %s", c.what), true
 }
 
 func main() {
@@ -219,8 +273,8 @@ func main() {
 		fmt.Println("FAIL  infra —", err)
 		os.Exit(1)
 	}
-	if len(cases) != *wantCases {
-		fmt.Printf("FAIL  infra — %d cases in %s, want exactly %d: a case was lost or added without the count\n", len(cases), flag.Arg(1), *wantCases)
+	if e := countError(len(cases), *wantCases, flag.Arg(1)); e != "" {
+		fmt.Println(e)
 		os.Exit(1)
 	}
 
@@ -265,28 +319,14 @@ func main() {
 				denials[n] = err
 			}
 		}
-		var others []string
-		for _, n := range names {
-			if denials[n] != nil && n != c.policy {
-				others = append(others, fmt.Sprintf("%s: %v", n, denials[n]))
-			}
-		}
-		switch {
-		case c.want == "admit" && len(denials) == 0:
-			fmt.Printf("PASS  admit:  %s\n", c.what)
-		case c.want == "refuse" && refusedByPolicy(denials[c.policy]) && len(others) == 0:
-			if verbose {
-				fmt.Printf("PASS  refuse: %s — %v\n", c.what, denials[c.policy])
-			} else {
-				fmt.Printf("PASS  refuse: %s\n", c.what)
-			}
-		case c.want == "admit":
+		line, ok := verdict(c, denials, names)
+		if !ok {
 			failed++
-			fmt.Printf("FAIL  admit: %s (%s): %s\n", c.what, c.file, strings.Join(others, "; "))
-		default:
-			failed++
-			fmt.Printf("FAIL  refuse: %s (%s): by %s: %v; by others: [%s]\n", c.what, c.file, c.policy, denials[c.policy], strings.Join(others, "; "))
 		}
+		if ok && verbose && c.want == "refuse" {
+			line = fmt.Sprintf("%s — %v", line, denials[c.policy])
+		}
+		fmt.Println(line)
 	}
 	fmt.Printf("== offline result: %d cases, %d failed\n", len(cases), failed)
 	if failed > 0 {
@@ -484,7 +524,7 @@ func loadCases(dir, configNS string) ([]testCase, error) {
 			for _, h := range []struct {
 				prefix string
 				dst    *string
-			}{{"# want: ", &c.want}, {"# policy: ", &c.policy}, {"# what: ", &c.what}, {"# as: ", &c.as}} {
+			}{{"# want: ", &c.want}, {"# policy: ", &c.policy}, {"# message: ", &c.message}, {"# what: ", &c.what}, {"# as: ", &c.as}, {"# scope: ", &c.scope}} {
 				if strings.HasPrefix(line, h.prefix) {
 					*h.dst = strings.TrimSpace(strings.TrimPrefix(line, h.prefix))
 				}
@@ -493,8 +533,11 @@ func loadCases(dir, configNS string) ([]testCase, error) {
 		if c.want != "admit" && c.want != "refuse" {
 			return nil, fmt.Errorf("%s: want is %q, not admit or refuse", file, c.want)
 		}
-		if (c.want == "refuse") != (c.policy != "") {
-			return nil, fmt.Errorf("%s: a refusal names its policy, an admission none (want %q, policy %q)", file, c.want, c.policy)
+		if (c.want == "refuse") != (c.policy != "") || (c.want == "refuse") != (c.message != "") {
+			return nil, fmt.Errorf("%s: a refusal names its policy and its rule's message, an admission neither (want %q, policy %q, message %q)", file, c.want, c.policy, c.message)
+		}
+		if c.scope != "" && c.scope != "cluster" {
+			return nil, fmt.Errorf("%s: scope is %q, not cluster", file, c.scope)
 		}
 		docs, err := decodeDocs(bytes.NewReader(raw))
 		if err != nil {
@@ -504,7 +547,10 @@ func loadCases(dir, configNS string) ([]testCase, error) {
 			return nil, fmt.Errorf("%s: %d objects, want 1 (CREATE) or 2 (UPDATE: new, old)", file, len(docs))
 		}
 		for _, d := range docs {
-			if d.GetNamespace() == "" {
+			switch {
+			case c.scope == "cluster" && d.GetNamespace() != "":
+				return nil, fmt.Errorf("%s: a cluster-scoped object has no namespace, got %q", file, d.GetNamespace())
+			case c.scope != "cluster" && d.GetNamespace() == "":
 				d.SetNamespace(configNS)
 			}
 			if d.GroupVersionKind().Group != group {

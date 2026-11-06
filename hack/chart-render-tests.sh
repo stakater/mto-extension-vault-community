@@ -47,16 +47,26 @@
 #                  mapping that is not a map, fallback other than deny, a role
 #                  named fallback (with caps), listed twice or without caps,
 #                  caps with sudo or of another shape, an empty template, a
-#                  double quote, a newline or a tab; the tenant chart refuses
-#                  its share of them; the defaults and the near misses render.
+#                  double quote, a newline or a tab, a role that is not a DNS
+#                  label (with caps), roles that are not a list or are empty;
+#                  the tenant chart refuses its share of them, and a workload
+#                  token ttl over its maxTTL; the defaults and the near misses
+#                  render.
+#   ssotoken     — one table of SSO token ttl and maxTTL through the tenant
+#                  chart and the bootstrap: a ttl over the maxTTL (a side not
+#                  set is the tenant chart's default) and a value Vault can't
+#                  read fail in both; seconds, days, 1h30m, 1.5h, 500ms and
+#                  Vault's default (0, "") are read as Vault reads them.
 #   rolebind     — every workload role binds exactly its own policy, its tenant's
 #                  mount, its own ServiceAccount, and a selector of exactly its
 #                  namespace name and the tenant label: a namespace name reused by
 #                  another tenant gets nothing.
 #   mountagree   — the auth mount path agrees across the AuthEngineMount, its
 #                  config, every role, the SecretStores and VAULT_K8S_MOUNT,
-#                  also with a / around every mount path and name (the
-#                  admission policies expect none); VAULT_NAMESPACE is empty.
+#                  also with a / around every mount path and name and around
+#                  vco.authPath (the admission policies expect none, and the
+#                  parent and the CEL carry it trimmed); VAULT_NAMESPACE is
+#                  empty.
 #   storepath    — every SecretStore reads the tenant's mount <tenant>/kv, KV v2,
 #                  with no Vault namespace; every ExternalSecret key is relative
 #                  to that mount; with ESO off install-wide, a Deployment asking
@@ -116,7 +126,16 @@
 #   rbaccover    — every redhatcop.redhat.io kind any render emits is in the
 #                  ClusterRole (list only) and the configNamespace Role (all verbs).
 #   toggles      — near-miss toggle values fail, via the schema with templates
-#                  stripped AND via the helpers with the schema removed.
+#                  stripped AND via the helpers with the schema removed, each
+#                  with its own message.
+#   nulltoggle   — a toggle set to null, or a key whose toggle is commented
+#                  out, renders what the default renders (admission on, ESO
+#                  enabled); an explicit false still changes the render.
+#   typeprobe    — every value the tenant chart and the parent render (VCO's
+#                  login, the API host, the reviewer, the client secret key,
+#                  the refresh interval, a slice key, the Vault address, the
+#                  tenant label key) keeps the type of its field when it is a
+#                  string YAML reads as a number, and no map key is a number.
 #   nullfields   — no rendered field is YAML null, in the bootstrap, the parent,
 #                  or the tenant chart with no workloads.
 #   parentplumb  — install-wide knobs reach the child valuesTemplate; an unset
@@ -127,9 +146,11 @@
 #                  name, an empty SSO mount path, ttl over maxTTL (also with
 #                  one side set, against the tenant chart's default), the
 #                  Kubernetes and SSO mounts on one path or one inside the
-#                  other, and a quote in vco.role fail; the schema refuses a
-#                  tenantValues value of a type the tenant chart can't read;
-#                  kubernetes_prod as a mount path and the near misses render.
+#                  other, a quote or a backslash in vco.role and a malformed
+#                  reviewer ServiceAccount fail; the schema refuses a
+#                  tenantValues value of a type the tenant chart can't read,
+#                  naming that field; kubernetes_prod as a mount path and the
+#                  near misses render.
 #   schemakeys   — at every object the bootstrap schema closes
 #                  (additionalProperties: false), found by walking the schema,
 #                  a misspelt key fails; the walk finds exactly the pinned
@@ -139,7 +160,9 @@
 #                  values.yaml keys, plus the removed ones whose guards name the
 #                  fix; the bootstrap's default SSO roles are the tenant chart's
 #                  sso.roles and roleCaps keys, and its default token ttl and
-#                  maxTTL the tenant chart's.
+#                  maxTTL, SSO token ttl and maxTTL, SSO mount and group
+#                  pattern the tenant chart's; the tenant chart's
+#                  monitoring.enabled is off, as the RBAC gate assumes.
 #   dnsregex     — every regex in the charts is one of the known forms: a
 #                  DNS-label copy loosened or spelt another way fails.
 #   versionpin   — the bootstrap's tenantChart.version equals the tenant chart
@@ -265,6 +288,10 @@ for c in all $SLICES; do
   identities "$WORK/$c.yaml" > "$WORK/$c.ids"
 done
 [ -s "$WORK/all.ids" ] || { echo "FAIL  setup — values-full rendered zero objects"; exit 1; }
+# The bootstrap renders at setup too, before any check: a parse error in it
+# stops the run here, and never reaches a check as that check's failure.
+"$HELM" template b "$BOOTSTRAP" -n "$NS" > "$WORK/boot-default.yaml" 2>"$WORK/boot.err" \
+  || { echo "FAIL  setup — the bootstrap did not render: $(first "$WORK/boot.err")"; exit 1; }
 for fx in guards no-optins no-workloads; do
   render all "$FIXTURES/values-$fx.yaml" > "$WORK/fx-$fx.raw" 2>"$WORK/fx.err" \
     || { echo "FAIL  setup — values-$fx did not render: $(first "$WORK/fx.err")"; exit 1; }
@@ -284,7 +311,7 @@ overlap="$(comm -12 "$WORK/core.ids" "$WORK/eso.ids")"
 un_ok=0; un_detail=""
 sort "$WORK/core.ids" "$WORK/eso.ids" > "$WORK/union.ids"
 diff "$WORK/union.ids" "$WORK/all.ids" > /dev/null \
-  || { un_ok=1; un_detail="$un_detail [core ∪ eso ≠ all: $(diff "$WORK/union.ids" "$WORK/all.ids" | head -4 | tr '\n' ' ')]"; }
+  || { un_ok=1; un_detail="$un_detail [core ∪ eso ≠ all: $({ diff "$WORK/union.ids" "$WORK/all.ids" || true; } | awk 'NR <= 4 { printf "%s ", $0 }')]"; }
 for fx in full guards no-optins no-workloads; do
   for c in core eso; do
     render "$c" "$FIXTURES/values-$fx.yaml" > "$WORK/un-$c.raw" 2>"$WORK/un.err" \
@@ -504,7 +531,7 @@ check rolebind "$rb_ok" "$rb_detail"
 # expect every object without it.
 ma_ok=0; ma_detail=""
 render all "$FIXTURES/values-full.yaml" --set kubernetesAuth.path=/kubernetes/ --set kubernetesAuth.name=workloads/ \
-  --set sso.mount.path=oidc/ --set sso.mount.name=/sso/ > "$WORK/ma-slash.raw" 2>"$WORK/ma.err" \
+  --set sso.mount.path=oidc/ --set sso.mount.name=/sso/ --set vco.authPath=/kubernetes/ > "$WORK/ma-slash.raw" 2>"$WORK/ma.err" \
   || { ma_ok=1; ma_detail="$ma_detail [the render with slashes failed: $(first "$WORK/ma.err")]"; }
 for f in all.raw ma-slash.raw; do
   yqs m_auth 'select(.kind == "AuthEngineMount" and .spec.type == "kubernetes") | .spec.path + "/" + .spec.name' "$WORK/$f"
@@ -521,7 +548,19 @@ for f in all.raw ma-slash.raw; do
   for pair in "oidc AuthEngineMount:$m_sso" "JWTOIDCAuthEngineConfig:$m_ssocfg" "oidc roles:$(sort -u <<<"$m_ssoroles")"; do
     [ "${pair#*:}" = team-a/oidc/sso ] || { ma_ok=1; ma_detail="$ma_detail [$f ${pair%%:*}: '$(echo "${pair#*:}" | tr '\n' ' ')']"; }
   done
+  # VCO's own login mount, as every CR names it: the admission policies
+  # expect it without a /.
+  yqs m_vco 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.authentication.path' "$WORK/$f"
+  [ "$(sort -u <<<"$m_vco")" = kubernetes ] || { ma_ok=1; ma_detail="$ma_detail [$f vco.authPath: '$(sort -u <<<"$m_vco" | tr '\n' ' ')']"; }
 done
+# The bootstrap with the same slashes: the parent's parameter and the CEL
+# carry the trimmed path.
+"$HELM" template b "$BOOTSTRAP" -n "$NS" --set vco.authPath=/kubernetes/ > "$WORK/ma-boot.yaml" 2>"$WORK/ma.err" \
+  || { ma_ok=1; ma_detail="$ma_detail [the bootstrap with vco.authPath=/kubernetes/ failed: $(first "$WORK/ma.err")]"; }
+yqs ma_param 'select(.kind == "Template") | .spec.parameters[]? | select(.name == "vcoAuthPath") | .value' "$WORK/ma-boot.yaml"
+[ "$ma_param" = kubernetes ] || { ma_ok=1; ma_detail="$ma_detail [the parent's vcoAuthPath is '$ma_param']"; }
+grep -qF "object.spec.authentication.path == 'kubernetes' &&" "$WORK/ma-boot.yaml" \
+  || { ma_ok=1; ma_detail="$ma_detail [the admission policies expect another vco.authPath than kubernetes]"; }
 yqs vns 'select(.kind == "ConfigMap" and (.metadata.name | test("^vault-config-")) and (.data | has("VAULT_K8S_MOUNT"))) | .metadata.name + "=" + (.data.VAULT_NAMESPACE | tostring)' "$WORK/all.raw"
 [ -n "$vns" ] || { ma_ok=1; ma_detail="$ma_detail [no vault-config ConfigMap — the check proves nothing]"; }
 bad="$(grep -v '=$' <<<"$vns" || true)"
@@ -817,8 +856,10 @@ sg_tenant string-map 'sso: {tenantRoleMapping: {admin: "ops-{tenant}-admins"}}' 
 sg_tenant one-group 'sso: {tenantGroupTemplate: "{tenant}"}' 'bind the same group'
 sg_tenant ttl 'token: {ttl: 7200, maxTTL: 3600}' 'is over token.maxTTL'
 sg_tenant mapped 'sso: {tenantRoleMapping: {admin: {pattern: "ops-{tenant}"}}}' ok
-sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message> [chart dir]
+sg_tenant roles-empty 'sso: {roles: []}' 'with an empty sso.roles'
+sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message> [chart dir] [other values YAML]
   printf 'tenantValues: %s\n' "$2" > "$WORK/sg-boot.yaml"
+  [ -z "${5:-}" ] || printf '%s\n' "$5" >> "$WORK/sg-boot.yaml"
   if "$HELM" template b "${4:-$BOOTSTRAP}" -n "$NS" -f "$WORK/sg-boot.yaml" > /dev/null 2>"$WORK/sg.err"; then
     [ "$3" = ok ] || { sg_ok=1; sg_detail="$sg_detail [bootstrap $1 rendered, want '$3']"; }
   elif [ "$3" = ok ]; then
@@ -866,7 +907,59 @@ sg_boot caps-shape '{roleCaps: {admin: "read, list"}}' 'is not one capability li
 sg_boot empty-template '{sso: {tenantGroupTemplate: ""}}' 'is set but empty'
 sg_boot dquote '{sso: {tenantGroupTemplate: "{tenant}-\"{role}"}}' 'contains a quote, a double quote or a backslash'
 sg_boot badrole '{sso: {roles: [Admin]}}' 'is not a DNS label'
+# With a roleCaps entry, so only the DNS-label guard refuses it.
+sg_boot badrole-caps '{roleCaps: {Admin: "[\"read\"]"}, sso: {roles: [Admin]}}' 'is not a DNS label'
+sg_boot roles-string '{sso: {roles: admin}}' 'must be a list of role names' "$WORK/noschema/boot"
+# With SSO on only: with SSO off no tenant gets a role anyway.
+sg_boot roles-empty '{sso: {roles: []}}' 'tenantValues.sso.roles is empty' "$BOOTSTRAP" 'parent: {sso: {enabled: true, issuerUrl: "https://idp.example.com"}}'
+sg_boot roles-empty-sso-off '{sso: {roles: []}}' ok
 check ssogroups "$sg_ok" "$sg_detail"
+
+# ssotoken — one table of SSO token ttl and maxTTL, through the tenant chart
+# at render and the bootstrap at install (a side not set is the tenant
+# chart's default): both refuse what Vault refuses, a role whose ttl is over
+# its max ttl, and a value Vault can't read.
+sx_ok=0; sx_detail=""
+while IFS='|' read -r label vals want; do
+  [ -n "$label" ] || continue
+  printf 'sso: {enabled: true}\nssoToken: %s\n' "$vals" > "$WORK/sx-t.yaml"
+  printf 'tenantValues: {ssoToken: %s}\n' "$vals" > "$WORK/sx-b.yaml"
+  for side in tenant bootstrap; do
+    rc=0
+    if [ "$side" = tenant ]; then
+      render core "$FIXTURES/values-full.yaml" -f "$WORK/sx-t.yaml" > /dev/null 2>"$WORK/sx.err" || rc=$?
+    else
+      "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/sx-b.yaml" > /dev/null 2>"$WORK/sx.err" || rc=$?
+    fi
+    if [ "$rc" = 0 ]; then
+      [ "$want" = ok ] || { sx_ok=1; sx_detail="$sx_detail [$side $label rendered, want '$want']"; }
+    elif [ "$want" = ok ]; then
+      sx_ok=1; sx_detail="$sx_detail [$side $label was refused: $(first "$WORK/sx.err")]"
+    else
+      grep -qF -- "$want" "$WORK/sx.err" || { sx_ok=1; sx_detail="$sx_detail [$side $label failed elsewhere: $(first "$WORK/sx.err")]"; }
+    fi
+  done
+done <<'TABLE'
+two-hours|{ttl: "2h"}|ttl "2h" is over
+max-ten-minutes|{maxTTL: "10m"}|ttl "15m" is over
+decimal|{ttl: "1.5h"}|ttl "1.5h" is over
+minutes-over-an-hour|{ttl: "61m"}|ttl "61m" is over
+seconds|{ttl: "90", maxTTL: "1m"}|ttl "90" is over
+days|{ttl: "2d", maxTTL: "1d"}|ttl "2d" is over
+not-a-duration|{ttl: "soon"}|"soon" is not a duration Vault reads
+equal|{ttl: "1h", maxTTL: "1h"}|ok
+mixed|{ttl: "1h30m", maxTTL: "2h"}|ok
+millis|{ttl: "500ms"}|ok
+plus-sign|{ttl: "+20m"}|ok
+plus-seconds|{ttl: "+900"}|ok
+leading-dot|{ttl: ".5h"}|ok
+trailing-dot|{ttl: "1.h"}|ok
+greek-mu|{ttl: "1μs"}|ok
+plus-over|{ttl: "+2h"}|ttl "+2h" is over
+max-vault-default|{ttl: "2h", maxTTL: "0"}|ok
+ttl-vault-default|{ttl: ""}|ok
+TABLE
+check ssotoken "$sx_ok" "$sx_detail"
 
 # falsestring — schema kept on: it accepts "false", which is the point
 fs_ok=0; fs_detail=""
@@ -917,9 +1010,8 @@ cp "$BOOTSTRAP/files/parent-gotemplate.tpl" "$WORK/shim/files/"
 printf 'apiVersion: v2\nname: shim\nversion: 0.0.1\n' > "$WORK/shim/Chart.yaml"
 printf '{{ tpl ($.Files.Get "files/parent-gotemplate.tpl") (dict "parameters" .Values.parameters) }}\n' > "$WORK/shim/templates/render.yaml"
 # The parameters are the bootstrap's own: read from its rendered parent
-# Template, so a parameter renamed on one side cannot pass here.
-"$HELM" template b "$BOOTSTRAP" -n "$NS" > "$WORK/boot-default.yaml" 2>"$WORK/boot.err" \
-  || { echo "FAIL  setup — the bootstrap did not render: $(first "$WORK/boot.err")"; exit 1; }
+# Template (rendered at setup), so a parameter renamed on one side cannot pass
+# here.
 "$YQ" e -N "select(.kind == \"Template\" and .metadata.name == \"$P-parent\")
          | {\"parameters\": (.spec.parameters | map(select(has(\"value\"))) | map({\"key\": .name, \"value\": .value}) | from_entries)}" \
   "$WORK/boot-default.yaml" > "$WORK/shim/values.yaml" 2>"$WORK/yq.err" \
@@ -976,6 +1068,64 @@ for eso in enabled disabled; do
   emit "$eso" > "$WORK/emit-$eso.yaml" 2>"$WORK/emit.err" \
     || { echo "FAIL  setup — the parent did not render with eso=$eso: $(first "$WORK/emit.err")"; exit 1; }
 done
+
+# typeprobe — every scalar the tenant chart and the parent render from a
+# value keeps its type when the value is a string YAML reads as a number: a
+# base render with plain strings, and a probe with "123" (and "0" for the
+# refresh interval, "#123" for a slice key), must agree on the type of every
+# field both have, and no map key may be a number. Unquoted, each would
+# install and then fail every tenant at apply (C.21).
+tp_ok=0; tp_detail=""
+tp_leaves() { # tp_leaves <manifest>: "<kind>/<name> <path> <tag>" per scalar
+  "$YQ" e -N '. as $d | .. | select(tag != "!!map" and tag != "!!seq") | $d.kind + "/" + ($d.metadata.name // "") + "	" + (path | join(".")) + "	" + tag' "$1"
+}
+tp_compare() { # tp_compare <label> <base manifest> <probe manifest> <fewest fields to compare>
+  local n bad keys
+  tp_leaves "$2" | sort > "$WORK/tp-base" || { echo "FAIL  infra — yq failed on $2"; exit 1; }
+  tp_leaves "$3" | sort > "$WORK/tp-probe" || { echo "FAIL  infra — yq failed on $3"; exit 1; }
+  # Join on "<kind>/<name> <path>": the fields both renders have.
+  awk -F'\t' 'NR == FNR { b[$1 "\t" $2] = $3; next } ($1 "\t" $2) in b { n++; if (b[$1 "\t" $2] != $3) print $1 " " $2 ": " b[$1 "\t" $2] " -> " $3 } END { print "compared " n+0 > "/dev/stderr" }' \
+    "$WORK/tp-base" "$WORK/tp-probe" > "$WORK/tp-bad" 2>"$WORK/tp-n"
+  n=$(sed -n 's/^compared //p' "$WORK/tp-n")
+  [ "${n:-0}" -ge "$4" ] || { tp_ok=1; tp_detail="$tp_detail [$1: only ${n:-0} fields compared, want $4 or more — the check proves nothing]"; }
+  bad=$(head -5 "$WORK/tp-bad" | tr '\n' '|')
+  [ -z "$bad" ] || { tp_ok=1; tp_detail="$tp_detail [$1: a field changed its type: $bad]"; }
+  keys=$("$YQ" e -N '. as $d | .. | select(tag == "!!map") | keys | .[] | select(tag != "!!str") | $d.kind + "/" + $d.metadata.name + " key " + (. | tostring) + " " + tag' "$3") \
+    || { echo "FAIL  infra — yq failed on $3"; exit 1; }
+  [ -z "$keys" ] || { tp_ok=1; tp_detail="$tp_detail [$1: a map key is not a string: $(head -3 <<<"$keys" | tr '\n' '|')]"; }
+}
+tp_set() { # tp_set <value>: the probed tenant chart values, each set to <value>
+  printf -- '--set-string vco.role=%s --set-string vco.authPath=%s --set-string vco.serviceAccount=%s --set-string kubernetesAuth.kubernetesHost=%s --set-string kubernetesAuth.tokenReviewerServiceAccount=%s --set-string kubernetesAuth.name=%s --set-string sso.mount.name=%s --set-string tenantLabelKey=%s --set-string sso.oidc.clientSecretRef.key=%s --set-string vaultServer=%s' "$1" "$1" "$1" "$1" "$1" "$1" "$1" "$1" "$1" "$1"
+}
+sed 's/"db-creds#password"/"db-creds#123"/' "$FIXTURES/values-full.yaml" > "$WORK/tp-fixture.yaml"
+grep -q '"db-creds#123"' "$WORK/tp-fixture.yaml" || { echo "FAIL  infra — the probe fixture has no slice key to probe"; exit 1; }
+# shellcheck disable=SC2046
+render all "$FIXTURES/values-full.yaml" $(tp_set plain-x) --set-string externalSecretRefreshInterval=1h > "$WORK/tp-base.yaml" 2>"$WORK/tp.err" \
+  || { tp_ok=1; tp_detail="$tp_detail [the base render failed: $(first "$WORK/tp.err")]"; }
+# shellcheck disable=SC2046
+render all "$WORK/tp-fixture.yaml" $(tp_set 123) --set-string externalSecretRefreshInterval=0 > "$WORK/tp-probe.yaml" 2>"$WORK/tp.err" \
+  || { tp_ok=1; tp_detail="$tp_detail [the probe render failed: $(first "$WORK/tp.err")]"; }
+# The probe reaches the fields it names: a check that changes nothing proves nothing.
+yqs tp_role 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.authentication.role' "$WORK/tp-probe.yaml"
+[ "$(sort -u <<<"$tp_role")" = 123 ] || { tp_ok=1; tp_detail="$tp_detail [the probe's vco.role is '$(sort -u <<<"$tp_role" | tr '\n' ' ')', want 123]"; }
+yqs tp_slice 'select(.kind == "ExternalSecret") | .spec.data[]? | .secretKey' "$WORK/tp-probe.yaml"
+grep -qx 123 <<<"$tp_slice" || { tp_ok=1; tp_detail="$tp_detail [no ExternalSecret carries the probe's slice key 123]"; }
+tp_compare "tenant chart" "$WORK/tp-base.yaml" "$WORK/tp-probe.yaml" 700
+emit enabled --set-string parameters.vcoAuthPath=plain-x --set-string parameters.vcoRole=plain-x \
+  --set-string parameters.vcoServiceAccount=plain-x > "$WORK/tp-pbase.yaml" 2>"$WORK/tp.err" \
+  || { tp_ok=1; tp_detail="$tp_detail [the parent's base render failed: $(first "$WORK/tp.err")]"; }
+# The namespaces carry the probe's label key too, so the child TIs (and their
+# namespaceSelector) render.
+sed 's#stakater.com/tenant: #"123": #' "$WORK/emit-tenants.yaml" > "$WORK/tp-tenants.yaml"
+emit enabled -f "$WORK/tp-tenants.yaml" --set-string parameters.vcoAuthPath=123 --set-string parameters.vcoRole=123 \
+  --set-string parameters.vcoServiceAccount=123 --set-string parameters.tenantLabelKey=123 > "$WORK/tp-pprobe.yaml" 2>"$WORK/tp.err" \
+  || { tp_ok=1; tp_detail="$tp_detail [the parent's probe render failed: $(first "$WORK/tp.err")]"; }
+yqs tp_prole 'select(.apiVersion == "redhatcop.redhat.io/v1alpha1") | .spec.authentication.role' "$WORK/tp-pprobe.yaml"
+[ "$(sort -u <<<"$tp_prole")" = 123 ] || { tp_ok=1; tp_detail="$tp_detail [the parent probe's vcoRole is '$(sort -u <<<"$tp_prole" | tr '\n' ' ')', want 123]"; }
+yqs tp_ptis 'select(.kind == "TemplateInstance") | .metadata.name' "$WORK/tp-pprobe.yaml"
+[ "$(lines "$tp_ptis")" -ge 2 ] || { tp_ok=1; tp_detail="$tp_detail [the parent probe renders $(lines "$tp_ptis") TemplateInstances: their namespaceSelector is not probed]"; }
+tp_compare parent "$WORK/tp-pbase.yaml" "$WORK/tp-pprobe.yaml" 80
+check typeprobe "$tp_ok" "$tp_detail"
 
 # emission
 em_ok=0; em_detail=""
@@ -1056,6 +1206,9 @@ grep -q '"role":"vco-role"' <<<"$pauth" && grep -q '"name":"vco-sa"' <<<"$pauth"
   || { nt_ok=1; nt_detail="$nt_detail [role and serviceAccount not in their own fields: $pauth]"; }
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
   nt_ok=1; nt_detail="$nt_detail [the bootstrap accepted vco.namespace]"
+else
+  grep -qF -- '- vco: Additional property namespace is not allowed' "$WORK/nt.err" \
+    || { nt_ok=1; nt_detail="$nt_detail [the bootstrap's vco.namespace failed elsewhere: $(first "$WORK/nt.err")]"; }
 fi
 if render core "$FIXTURES/values-full.yaml" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
   nt_ok=1; nt_detail="$nt_detail [the tenant chart accepted vco.namespace]"
@@ -1111,6 +1264,9 @@ for gk in monitoring.coreos.com/prometheusrules; do
 done
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set-string tenantValues.monitoring.enabled=yes > /dev/null 2>"$WORK/boot.err"; then
   rg_ok=1; rg_detail="$rg_detail [tenantValues.monitoring.enabled=yes accepted]"
+else
+  grep -qF -- '- tenantValues.monitoring.enabled: ' "$WORK/boot.err" \
+    || { rg_ok=1; rg_detail="$rg_detail [tenantValues.monitoring.enabled=yes failed elsewhere: $(first "$WORK/boot.err")]"; }
 fi
 check rbacgate "$rg_ok" "$rg_detail"
 
@@ -1139,21 +1295,53 @@ check rbaccover "$rc_ok" "$rc_detail"
 
 # toggles — schema with templates stripped, helpers with the schema removed
 tg_ok=0; tg_detail=""
-tg_case() { # tg_case <chart-dir-name> <values-arg> <label>
+tg_case() { # tg_case <chart-dir-name> <values-arg> <label> <helper message> <schema message>
+  local variant want
   for variant in noschema notpl; do
+    if [ "$variant" = noschema ]; then want=$4; else want=$5; fi
     if "$HELM" template x "$WORK/$variant/$1" -n "$NS" $2 > /dev/null 2>"$WORK/tg.err"; then
       tg_ok=1; tg_detail="$tg_detail [$3 accepted with $variant]"
+    else
+      grep -qF -- "$want" "$WORK/tg.err" || { tg_ok=1; tg_detail="$tg_detail [$3 with $variant failed elsewhere: $(first "$WORK/tg.err")]"; }
     fi
   done
 }
-tg_case boot "--set parent.eso=true" "parent.eso=true"
-tg_case boot "--set parent.sso.enabled=yes" "parent.sso.enabled=yes"
-tg_case boot "--set-string sync.mode=on" "sync.mode=on"
+tg_case boot "--set parent.eso=true" "parent.eso=true" 'parent.eso must be "enabled" or "disabled"' '- parent.eso: '
+tg_case boot "--set parent.sso.enabled=yes" "parent.sso.enabled=yes" 'parent.sso.enabled must be a boolean true or false' '- parent.sso.enabled: '
+tg_case boot "--set-string sync.mode=on" "sync.mode=on" 'sync.mode must be one of off, revert, strict' '- sync.mode: '
 for variant in noschema notpl; do
   "$HELM" template x "$WORK/$variant/boot" -n "$NS" --set parent.eso=disabled --set-string parent.sso.enabled=true --set parent.sso.issuerUrl=https://idp > /dev/null 2>"$WORK/tg.err" \
     || { tg_ok=1; tg_detail="$tg_detail [canonical bootstrap values rejected with $variant: $(first "$WORK/tg.err")]"; }
 done
 check toggles "$tg_ok" "$tg_detail"
+
+# nulltoggle — a toggle set to null, or a key whose toggle is commented out,
+# renders what the default renders: Helm deletes a null key before the schema
+# sees it, and the helpers then take the chart default, never "off".
+nl_ok=0; nl_detail=""
+while IFS= read -r c; do
+  [ -n "$c" ] || continue
+  printf '%b\n' "$c" > "$WORK/nl.yaml"
+  if "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/nl.yaml" > "$WORK/nl.out" 2>"$WORK/nl.err"; then
+    cmp -s "$WORK/boot-default.yaml" "$WORK/nl.out" \
+      || { nl_ok=1; nl_detail="$nl_detail [$c renders other than the default: $({ diff "$WORK/boot-default.yaml" "$WORK/nl.out" || true; } | awk '/^[<>]/ && n < 2 { printf "%s ", $0; n++ }')]"; }
+  else
+    nl_ok=1; nl_detail="$nl_detail [$c failed: $(first "$WORK/nl.err")]"
+  fi
+done <<'TABLE'
+admission:\n  # enabled: true
+admission: {enabled: null}
+admission: null
+parent: {eso: null}
+parent: {sso: {enabled: null}}
+sync: {mode: null}
+TABLE
+# A control: the comparison sees an explicit change.
+"$HELM" template b "$BOOTSTRAP" -n "$NS" --set admission.enabled=false > "$WORK/nl.out" 2>"$WORK/nl.err" \
+  || { nl_ok=1; nl_detail="$nl_detail [admission.enabled=false failed: $(first "$WORK/nl.err")]"; }
+cmp -s "$WORK/boot-default.yaml" "$WORK/nl.out" \
+  && { nl_ok=1; nl_detail="$nl_detail [admission.enabled=false renders the default — the check sees nothing]"; }
+check nulltoggle "$nl_ok" "$nl_detail"
 
 # nullfields — with a self-check, because a detector that cannot report is
 # indistinguishable from a clean render.
@@ -1252,7 +1440,8 @@ for c in "configNamespace:configNamespace: Vault-Config" \
          "kubernetesAuth.path:kubernetesAuth: {path: \"k8s.x\"}" \
          "kubernetesAuth.name:kubernetesAuth: {name: \"\"}" \
          "tenantValues.sso.mount.path:tenantValues: {sso: {mount: {path: \"\"}}}" \
-         "tenantValues.sso.mount.name:tenantValues: {sso: {mount: {name: \"a b\"}}}"; do
+         "tenantValues.sso.mount.name:tenantValues: {sso: {mount: {name: \"a b\"}}}" \
+         "kubernetesAuth.tokenReviewerServiceAccount:kubernetesAuth: {tokenReviewerServiceAccount: \"a b\"}"; do
   iv_helper "${c%%:*}" "${c#*:}" "${c%%:*} \""
 done
 iv_helper "a reserved shared name" 'parent: {sharedTenantName: sys}' 'parent.sharedTenantName "sys" is a reserved name'
@@ -1263,6 +1452,15 @@ iv_helper "ttl over maxTTL" 'parent: {token: {ttl: 7200, maxTTL: 3600}}' 'parent
 iv_helper "a ttl over the default maxTTL" 'parent: {token: {ttl: 20000}}' 'parent.token.ttl 20000 is over parent.token.maxTTL 14400'
 iv_helper "a maxTTL under the default ttl" 'parent: {token: {maxTTL: 1800}}' 'parent.token.ttl 3600 is over parent.token.maxTTL 1800'
 iv_helper "an empty vco.role" 'vco: {role: ""}' 'vco.role "" must be set'
+# Null: Helm deletes the key, so the schema's minLength never sees it.
+iv_helper "a null API host" 'kubernetesAuth: {kubernetesHost: null}' 'kubernetesAuth.kubernetesHost must be set'
+iv_helper "a null tenant chart version" 'tenantChart: {version: null}' 'tenantChart.version must be set'
+# With admission off: the admission template embeds vco.role, refuses a quote
+# itself, and renders before 01-checks.yaml.
+iv_helper "a quote in vco.role" "admission: {enabled: false}
+vco: {role: \"vco'x\"}" "vco.role \"vco'x\" must be set and hold no quote or backslash"
+iv_helper "a backslash in vco.role" 'admission: {enabled: false}
+vco: {role: "vco\\x"}' 'must be set and hold no quote or backslash'
 # The Kubernetes and SSO auth mounts: never one path, never one inside the
 # other (auth/<tenant>/oidc/sso by default).
 iv_helper "both mounts on one path" 'kubernetesAuth: {path: oidc, name: sso}' 'kubernetesAuth (auth/<tenant>/oidc/sso) and tenantValues.sso.mount (auth/<tenant>/oidc/sso)'
@@ -1270,33 +1468,57 @@ iv_helper "the Kubernetes mount inside the SSO mount" 'kubernetesAuth: {path: oi
 iv_helper "the SSO mount inside the Kubernetes mount" 'tenantValues: {sso: {mount: {path: kubernetes/workloads, name: sso}}}' 'kubernetesAuth (auth/<tenant>/kubernetes/workloads) and tenantValues.sso.mount (auth/<tenant>/kubernetes/workloads/sso)'
 # Wrong types the tenant chart can't read: the schema refuses each, on its
 # own (the templates stripped).
-for c in 'tenantValues: {roleCaps: null}' 'tenantValues: {roleCaps: {admin: [read]}}' \
-         'tenantValues: {sso: {tenantRoleMapping: []}}' 'tenantValues: {sso: {tenantRoleMapping: {admin: {pattern: ["{tenant}-x"]}}}}' \
-         'tenantValues: {ssoToken: ""}' 'tenantValues: {ssoToken: {ttl: 900}}' \
-         'tenantValues: {sso: {oidc: {clientSecretRef: x}}}' 'tenantValues: {sso: {oidc: {clientSecretRef: {name: 1}}}}' \
-         'tenantValues: {sso: {oidc: {caBundlePem: 123}}}' 'tenantValues: {vaultCABundle: 123}' \
-         'tenantValues: {sso: {oidc: {clientId: ""}}}' 'tenantValues: {sso: {tenantGroupTemplate: [x]}}' \
-         'tenantValues: {sso: {mount: {name: 1}}}' 'tenantValues: {monitoring: {prometheusNamespace: 1}}'; do
+# Each names the field the schema must refuse, so a refusal of another field
+# is not this case's.
+while IFS='|' read -r field c; do
+  [ -n "$field" ] || continue
   printf '%s\n' "$c" > "$WORK/iv.yaml"
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
     iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
+  else
+    grep -qF -- "- $field: " "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
   fi
-done
+done <<'TABLE'
+tenantValues.roleCaps|tenantValues: {roleCaps: null}
+tenantValues.roleCaps.admin|tenantValues: {roleCaps: {admin: [read]}}
+tenantValues.sso.tenantRoleMapping|tenantValues: {sso: {tenantRoleMapping: []}}
+tenantValues.sso.tenantRoleMapping.admin.pattern|tenantValues: {sso: {tenantRoleMapping: {admin: {pattern: ["{tenant}-x"]}}}}
+tenantValues.ssoToken|tenantValues: {ssoToken: ""}
+tenantValues.ssoToken.ttl|tenantValues: {ssoToken: {ttl: 900}}
+tenantValues.sso.oidc.clientSecretRef|tenantValues: {sso: {oidc: {clientSecretRef: x}}}
+tenantValues.sso.oidc.clientSecretRef.name|tenantValues: {sso: {oidc: {clientSecretRef: {name: 1}}}}
+tenantValues.sso.oidc.caBundlePem|tenantValues: {sso: {oidc: {caBundlePem: 123}}}
+tenantValues.vaultCABundle|tenantValues: {vaultCABundle: 123}
+tenantValues.sso.oidc.clientId|tenantValues: {sso: {oidc: {clientId: ""}}}
+tenantValues.sso.tenantGroupTemplate|tenantValues: {sso: {tenantGroupTemplate: [x]}}
+tenantValues.sso.mount.name|tenantValues: {sso: {mount: {name: 1}}}
+tenantValues.monitoring.prometheusNamespace|tenantValues: {monitoring: {prometheusNamespace: 1}}
+TABLE
 # Their right forms pass the schema, the helpers' near misses too.
 printf '%s\n' 'tenantValues: {vaultCABundle: pem, ssoToken: {ttl: 30m, maxTTL: 2h}, roleCaps: {ops: "[\"read\"]"}, sso: {roles: [admin, ops], tenantGroupTemplate: "{tenant}-{role}s", tenantRoleMapping: {admin: {pattern: "ops-{tenant}-x"}, ops: {}, fallback: deny}, mount: {path: oidc, name: sso}, oidc: {clientId: vault, clientSecretRef: {name: a, key: b}, caBundlePem: pem}}, monitoring: {prometheusNamespace: monitoring}}' > "$WORK/iv.yaml"
 "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err" \
   || { iv_ok=1; iv_detail="$iv_detail [the schema refused the right types: $(first "$WORK/iv.err")]"; }
 # The schema refuses the ones it has a pattern for, on its own.
-for c in 'templateOperator: {namespace: ""}' 'templateOperator: {serviceAccountName: "a:b"}' 'parent: {sharedTenantName: sh.red}' 'configNamespace: Vault-Config'; do
+while IFS='|' read -r field c; do
+  [ -n "$field" ] || continue
   printf '%s\n' "$c" > "$WORK/iv.yaml"
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
     iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
+  else
+    grep -qF -- "- $field: Does not match pattern" "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
   fi
-done
+done <<'TABLE'
+templateOperator.namespace|templateOperator: {namespace: ""}
+templateOperator.serviceAccountName|templateOperator: {serviceAccountName: "a:b"}
+parent.sharedTenantName|parent: {sharedTenantName: sh.red}
+configNamespace|configNamespace: Vault-Config
+TABLE
 # Near misses that must install.
 for c in 'kubernetesAuth: {path: kubernetes_prod}' 'parent: {token: {ttl: 3600, maxTTL: 3600}}' 'parent: {sharedTenantName: shares}' \
          'parent: {token: {ttl: 14400}}' 'parent: {token: {maxTTL: 3600}}' 'parent: {token: {ttl: 20000, maxTTL: 0}}' \
-         'parent: {token: {ttl: 0, maxTTL: 1800}}' 'kubernetesAuth: {path: oidc, name: workloads}' 'kubernetesAuth: {path: oidc, name: ssox}'; do
+         'parent: {token: {ttl: 0, maxTTL: 1800}}' 'kubernetesAuth: {path: oidc, name: workloads}' 'kubernetesAuth: {path: oidc, name: ssox}' \
+         'tenantValues: {sso: {mount: {path: kubernetes, name: workloadsx}}}' 'vco: {authPath: /kubernetes/}' \
+         'kubernetesAuth: {tokenReviewerServiceAccount: vault-token-reviewer}'; do
   printf '%s\n' "$c" > "$WORK/iv.yaml"
   "$HELM" template b "$BOOTSTRAP" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err" \
     || { iv_ok=1; iv_detail="$iv_detail [$c was refused: $(first "$WORK/iv.err")]"; }
@@ -1357,6 +1579,9 @@ for obj in vco kubernetesAuth templateOperator tenantChart parent; do
   printf '%s: null\n' "$obj" > "$WORK/sk-null.yaml"
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/sk-null.yaml" > /dev/null 2>"$WORK/sk.err"; then
     sk_ok=1; sk_detail="$sk_detail [the schema accepted $obj: null]"
+  else
+    grep -qF -- "- (root): $obj is required" "$WORK/sk.err" \
+      || { sk_ok=1; sk_detail="$sk_detail [$obj: null failed elsewhere: $(first "$WORK/sk.err")]"; }
   fi
 done
 check schemakeys "$sk_ok" "$sk_detail"
@@ -1379,7 +1604,7 @@ tk_pair sso.oidc '.properties.tenantValues.properties.sso.properties.oidc.proper
 tk_pair sso.mount '.properties.tenantValues.properties.sso.properties.mount.properties' '.sso.mount'
 tk_pair monitoring '.properties.tenantValues.properties.monitoring.properties' '.monitoring'
 mkdir -p "$WORK/dr/templates" && cp "$BOOTSTRAP/templates/_helpers.tpl" "$WORK/dr/templates/" && cp "$BOOTSTRAP/Chart.yaml" "$WORK/dr/" \
-  && printf 'roles: {{ include "mto-extension-vault-community-bootstrap.defaultRoles" . | fromYamlArray | sortAlpha | join "," }}\ntoken: {{ include "mto-extension-vault-community-bootstrap.defaultToken" . | fromYaml | toJson }}\n' > "$WORK/dr/templates/x.yaml"
+  && printf 'roles: {{ include "mto-extension-vault-community-bootstrap.defaultRoles" . | fromYamlArray | sortAlpha | join "," }}\ntoken: {{ include "mto-extension-vault-community-bootstrap.defaultToken" . | fromYaml | toJson }}\nssoToken: {{ include "mto-extension-vault-community-bootstrap.defaultSsoToken" . | fromYaml | toJson }}\nssoMount: {{ include "mto-extension-vault-community-bootstrap.defaultSsoMount" . | fromYaml | toJson }}\ngroupTemplate: {{ include "mto-extension-vault-community-bootstrap.defaultGroupTemplate" . | quote }}\n' > "$WORK/dr/templates/x.yaml"
 "$HELM" template b "$WORK/dr" > "$WORK/dr.out" 2>"$WORK/dr.err" || { echo "FAIL  infra — cannot render the default roles: $(first "$WORK/dr.err")"; exit 1; }
 yqs bootroles '.roles' "$WORK/dr.out"
 yqs tenroles '.sso.roles | sort | join(",")' "$CHART/values.yaml"
@@ -1391,6 +1616,18 @@ yqs boottok '(.token.ttl | tostring) + "/" + (.token.maxTTL | tostring)' "$WORK/
 yqs tentok '(.token.ttl | tostring) + "/" + (.token.maxTTL | tostring)' "$CHART/values.yaml"
 [ -n "$tentok" ] && [ "$boottok" = "$tentok" ] \
   || { tk_ok=1; tk_detail="$tk_detail [the bootstrap's default token ttl/maxTTL '$boottok', the tenant chart's '$tentok']"; }
+# The SSO token, mount and group pattern defaults the install and the
+# admission policies assume, and the feature default the RBAC gate assumes.
+for pair in '.ssoToken.ttl + "/" + .ssoToken.maxTTL:.ssoToken.ttl + "/" + .ssoToken.maxTTL' \
+            '.ssoMount.path + "/" + .ssoMount.name:.sso.mount.path + "/" + .sso.mount.name' \
+            '.groupTemplate:.sso.tenantGroupTemplate'; do
+  yqs bootv "${pair%%:*}" "$WORK/dr.out"
+  yqs tenv "${pair#*:}" "$CHART/values.yaml"
+  [ -n "$tenv" ] && [ "$bootv" = "$tenv" ] \
+    || { tk_ok=1; tk_detail="$tk_detail [the bootstrap's default '$bootv', the tenant chart's ${pair#*:} '$tenv']"; }
+done
+yqs tenmon '.monitoring.enabled' "$CHART/values.yaml"
+[ "$tenmon" = false ] || { tk_ok=1; tk_detail="$tk_detail [the tenant chart's monitoring.enabled is '$tenmon': the bootstrap's RBAC gate takes an unset feature as off]"; }
 check tenantvaluekeys "$tk_ok" "$tk_detail"
 
 # dnsregex — one DNS-label regex, everywhere. Every character class with a-z
@@ -1602,6 +1839,9 @@ yqs adoff 'select(.kind == "ValidatingAdmissionPolicy" or .kind == "ValidatingAd
 [ -z "$adoff" ] || { ad_ok=1; ad_detail="$ad_detail [admission.enabled=false still renders: $(tr '\n' ' ' <<<"$adoff")]"; }
 if "$HELM" template b "$WORK/noschema/boot" -n "$NS" --set-string admission.enabled=yes > /dev/null 2>"$WORK/ad.err"; then
   ad_ok=1; ad_detail="$ad_detail [admission.enabled=yes accepted]"
+else
+  grep -qF 'admission.enabled must be a boolean true or false' "$WORK/ad.err" \
+    || { ad_ok=1; ad_detail="$ad_detail [admission.enabled=yes failed elsewhere: $(first "$WORK/ad.err")]"; }
 fi
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set "parent.sso.enabled=true" --set "parent.sso.issuerUrl=https://idp/x'y" > /dev/null 2>"$WORK/ad.err"; then
   ad_ok=1; ad_detail="$ad_detail [an issuer with a quote was embedded in CEL]"

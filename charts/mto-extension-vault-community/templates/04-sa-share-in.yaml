@@ -79,7 +79,7 @@ metadata:
 spec:
   provider:
     vault:
-      server: {{ $.Values.vaultServer }}
+      server: {{ $.Values.vaultServer | quote }}
       {{- if $.Values.vaultCABundle }}
       caBundle: {{ $.Values.vaultCABundle | b64enc | quote }}
       {{- end }}

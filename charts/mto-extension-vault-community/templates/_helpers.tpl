@@ -85,7 +85,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: helm-via-template-operator-v2
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
-{{ .Values.tenantLabelKey }}: {{ $t | quote }}
+{{ .Values.tenantLabelKey | quote }}: {{ $t | quote }}
 {{- end -}}
 
 {{/*
@@ -163,8 +163,8 @@ Usage:
 {{- define "vault.vcoAuth" -}}
 {{- $v := .Values.vco -}}
 authentication:
-  path: {{ required "vco.authPath must be set" $v.authPath }}
-  role: {{ required "vco.role must be set" $v.role }}
+  path: {{ trimAll "/" (toString (required "vco.authPath must be set" $v.authPath)) | quote }}
+  role: {{ required "vco.role must be set" $v.role | quote }}
   serviceAccount:
     name: {{ required "vco.serviceAccount must be set" $v.serviceAccount | quote }}
 {{- end -}}
@@ -290,6 +290,39 @@ Usage: {{ include "vault.tokenSeconds" (dict "name" "token.ttl" "value" $.Values
 {{- end -}}
 
 {{/*
+A Vault duration in seconds, for a comparison: what Vault's parseutil reads
+from a role's ttl. A number or a string of digits is seconds; "<n>d" is days;
+otherwise a Go duration of numbers and units h, m, s, ms, us, µs, μs, ns
+("1h30m", "1.5h", ".5h", "+20m"). Null, "" and 0 are Vault's default and give
+0. Anything else (a negative value too) fails, naming the value. The bootstrap's durationSeconds is the same; the
+render test ssotoken runs one table through both.
+Usage: include "vault.durationSeconds" (dict "name" "ssoToken.ttl" "value" .Values.ssoToken.ttl)
+*/}}
+{{- define "vault.durationSeconds" -}}
+{{- $s := ternary "" (toString .value) (kindIs "invalid" .value) -}}
+{{- /* A number as Go's time.ParseDuration reads one: 1, 1.5, 1. or .5. */ -}}
+{{- $num := "([0-9]+([.][0-9]*)?|[.][0-9]+)" -}}
+{{- $units := "(h|ms|m|s|us|µs|μs|ns)" -}}
+{{- if or (eq $s "") (eq $s "0") -}}
+0
+{{- else if regexMatch "^[+]?[0-9]+$" $s -}}
+{{- trimPrefix "+" $s -}}
+{{- else if regexMatch "^[+]?[0-9]+d$" $s -}}
+{{- mul (atoi (trimSuffix "d" (trimPrefix "+" $s))) 86400 -}}
+{{- else if regexMatch (printf "^[+]?(%s%s)+$" $num $units) $s -}}
+{{- $unit := dict "h" 3600.0 "m" 60.0 "s" 1.0 "ms" 0.001 "us" 0.000001 "µs" 0.000001 "μs" 0.000001 "ns" 0.000000001 -}}
+{{- $sum := 0.0 -}}
+{{- range $part := regexFindAll (printf "%s%s" $num $units) $s -1 -}}
+{{- $u := regexFind (printf "%s$" $units) $part -}}
+{{- $sum = addf $sum (mulf (float64 (trimSuffix $u $part)) (get $unit $u)) -}}
+{{- end -}}
+{{- $sum -}}
+{{- else -}}
+{{- fail (printf "%s %q is not a duration Vault reads: whole seconds (900), days (2d), or numbers with h, m, s (1h30m)" .name $s) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Token type stamped on every KubernetesAuthEngineRole.
 
   service  Vault persists the token: it can be renewed and REVOKED, and it is
@@ -351,7 +384,7 @@ targetNamespaces:
   targetNamespaceSelector:
     matchLabels:
       kubernetes.io/metadata.name: {{ .ns | quote }}
-      {{ .ctx.Values.tenantLabelKey }}: {{ .ctx.Values.tenant | quote }}
+      {{ .ctx.Values.tenantLabelKey | quote }}: {{ .ctx.Values.tenant | quote }}
 {{- end -}}
 
 {{/*

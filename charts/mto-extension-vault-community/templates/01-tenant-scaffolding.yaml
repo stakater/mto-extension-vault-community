@@ -45,9 +45,9 @@ spec:
   {{- include "vault.vcoAuth" $ | nindent 2 }}
   path: {{ printf "%s/%s" $name (trimAll "/" .Values.kubernetesAuth.path) | quote }}
   name: {{ trimAll "/" .Values.kubernetesAuth.name | quote }}
-  kubernetesHost: {{ .Values.kubernetesAuth.kubernetesHost }}
+  kubernetesHost: {{ .Values.kubernetesAuth.kubernetesHost | quote }}
   {{- with .Values.kubernetesAuth.tokenReviewerServiceAccount }}
   tokenReviewerServiceAccount:
-    name: {{ . }}
+    name: {{ . | quote }}
   {{- end }}
 {{- end }}

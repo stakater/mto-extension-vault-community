@@ -160,7 +160,7 @@ metadata:
     {{- $labels | nindent 4 }}
     vault.stakater.com/app: {{ $app | quote }}
 data:
-  VAULT_ADDR: {{ $.Values.vaultServer }}
+  VAULT_ADDR: {{ $.Values.vaultServer | quote }}
   {{- if $.Values.vaultCABundle }}
   VAULT_CACERT: /etc/vault/ca/ca.crt
   {{- end }}
@@ -238,7 +238,7 @@ metadata:
 spec:
   provider:
     vault:
-      server: {{ $.Values.vaultServer }}
+      server: {{ $.Values.vaultServer | quote }}
       {{- if $.Values.vaultCABundle }}
       caBundle: {{ $.Values.vaultCABundle | b64enc | quote }}
       {{- end }}

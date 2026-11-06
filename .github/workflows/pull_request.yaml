@@ -38,23 +38,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      # crd-validate runs the apiserver's admission pipeline through a Go helper.
+      # crd-validate and admission-offline run the apiserver's admission code
+      # through Go helpers.
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
       # No credential needed: the VCO CRDs are vendored in hack/vco-crds.
-      - name: make verify (docs, method, chart lint, render tests, CRD schema check)
+      - name: make verify (docs, method, chart lint, render tests, CRD schema check, admission CEL)
         run: make verify
 
-      # The release skips a version that is already published, so a changed
-      # chart without a bump would never be released. Caught here instead.
       # Every guard weakened in turn; a check must fail for each. Slower than
       # make verify (one render-test run per mutation), so its own step.
       - name: Every guard mutation is killed
         run: make mutation-test
 
+      # The release skips a version that is already published, so a changed
+      # chart without a bump would never be released. Caught here instead.
       # github.base_ref through env:, never inside run: — an expression there
       # is pasted into the script before the shell parses it.
       - name: A changed chart bumps its version

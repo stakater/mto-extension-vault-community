@@ -57,6 +57,6 @@ spec:
   OIDCCredentials:
     secret:
       name: {{ .Values.sso.oidc.clientSecretRef.name | quote }}
-    passwordKey: {{ .Values.sso.oidc.clientSecretRef.key }}
+    passwordKey: {{ .Values.sso.oidc.clientSecretRef.key | quote }}
 {{- end }}
 {{- end }}

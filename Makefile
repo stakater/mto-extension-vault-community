@@ -35,8 +35,9 @@ method: ## Roadmap, planning-doc and ADR rules.
 	$(PYTHON) hack/check_method.py repo
 
 .PHONY: test
-test: ## Tests for the method checks themselves.
+test: ## Tests for the method checks, the mutation runner and the offline admission runner themselves.
 	$(PYTHON) -m unittest discover -s hack -p 'test_*.py'
+	go test -count=1 ./hack/admission-eval/
 
 .PHONY: charts
 charts: helm-lint helm-render-test crd-validate admission-offline ## Lint, render tests (incl. version pin), CRD schema check, admission CEL.
@@ -71,8 +72,8 @@ crd-validate: helm yq ## Validate every rendered VCO CR against VCO's CRDs (apis
 	HELM=$(HELM) YQ=$(YQ_BIN) ./hack/crd-validate.sh $(VCO_CRD_DIR)
 
 .PHONY: admission-offline
-admission-offline: helm ## Run the admission policies' CEL offline (k8s.io/apiserver's plugin) against hack/lab/admission-cases.sh.
-	HELM=$(HELM) ./hack/admission-offline.sh
+admission-offline: helm yq ## Run the admission policies' CEL offline (k8s.io/apiserver's plugin) against hack/lab/admission-cases.sh and the charts' own render.
+	HELM=$(HELM) YQ=$(YQ_BIN) ./hack/admission-offline.sh
 
 .PHONY: mutation-test
 mutation-test: helm yq ## Weaken each guard in a copy of the repo; a check must fail for every one (hack/mutation_tests.py).
@@ -563,7 +564,7 @@ e2e-diagnostics: ## Dump cluster state and controller logs into ./e2e-logs.
 	@echo "diagnostics in ./e2e-logs"
 
 .PHONY: admission-test
-admission-test: ## Run the admission-policy cases against the lab (server-side dry runs; needs lab-bootstrap).
+admission-test: ## Run the admission-policy cases against the lab (dry runs; an update case's old object is real; needs lab-bootstrap).
 	CONTEXT=$(CONTEXT) KUBECTL=$(KUBECTL) CONFIG_NS=$(CONFIG_NS) ISSUER=$(DEX_ISSUER) \
 		TOV_USER=system:serviceaccount:$(TOV2_NS):$(TOV2_SA) ./hack/lab/admission-cases.sh
 

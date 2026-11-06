@@ -257,18 +257,41 @@ of closed objects; a mutation is killed only by its own case, never by a
 crash or another guard, and a mutation text that matches more than once
 fails the run; the live admission run sends the deletion attack's first step
 and the update cases to a real API server, and the e2e pins the split of live
-and offline cases; a deletion is never blocked, also for a CR without a spec;
+and offline cases; a deletion is not blocked, also for a CR without a spec
+(C.21 names the one exception);
 the docs say what is true. Satisfies **AC-ISO-6**, **AC-ISO-11**,
 **AC-ISO-12**. Planning:
 [`planning/C20-third-review-closed.md`](planning/C20-third-review-closed.md).
+
+**Story C.21 — The fourth review, closed** ✅ *Done*
+
+As a security owner, I want the findings of the review of C.20 fixed and
+pinned, so that no install value turns the admission policies off or breaks
+every tenant, and each admission rule's test fails only for that rule.
+
+Approved by Ayesha Arshad on 2026-11-05 ("fix these" on the fourth review).
+
+Done: a null toggle takes the chart default; each admission refusal case
+names the rule that must refuse it, and every rule of the four policies that
+the review found unpinned has a case that only it refuses; the charts' own
+render passes the admission CEL in `make verify`; every string that comes
+from a value renders as a string; a `tenantValues.ssoToken` TTL set on one
+side is checked against the other; the mutation runner counts no crash as a
+kill, tests its own evaluator, and lists every new guard; the docs say what is
+true. Satisfies **AC-ISO-6**, **AC-ISO-11**, **AC-ISO-12**. Planning:
+[`planning/C21-fourth-review-closed.md`](planning/C21-fourth-review-closed.md).
 
 **Story C.19 — The C.17 and C.18 fixes in the Enterprise extension** 📝 *Draft*
 — in `stakater/mto-extension-vault-enterprise`, which has the same gaps: a
 group pattern without `{tenant}` binds one group in every tenant, role
 patterns can give two tenants one group, ServiceAccount and namespace names
 render unquoted, and a workload role binds its namespace by name only, not by
-name and tenant label (Q13, `design.md` §2). Contract parity (ADR-0001) holds
-without it: none of these is a contract change.
+name and tenant label (Q13, `design.md` §2). Seen in its charts at f7a4155,
+the C.21 gaps too: a null toggle reads as off (`boolValue`, `esoMode`),
+`vco.role`, `kubernetesHost`, the client secret key, the refresh interval and
+a slice key render unquoted, and `ssoToken.ttl` is not compared with
+`maxTTL`. Contract parity (ADR-0001) holds without it: none of these is a
+contract change.
 
 ---
 
