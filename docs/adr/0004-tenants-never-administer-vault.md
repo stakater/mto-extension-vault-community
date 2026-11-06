@@ -1,7 +1,7 @@
 # ADR-0004: Tenants never administer Vault
 
-- **Status:** Proposed
-- **Date:** 2026-10-03
+- **Status:** Accepted
+- **Date:** 2026-10-03; accepted 2026-11-03
 
 ## Context
 
@@ -13,7 +13,7 @@ tenant; a tenant allowed to mount an engine could shadow a path.
 
 ## Decision
 
-- No tier — workload or person, including `admin` — may write `sys/policy`,
+- No role — workload or person, including `admin` — may write `sys/policy`,
   `sys/mounts`, `sys/auth`, `auth/*/role`, `auth/*/config` or `identity/*`.
   The scope check (ADR-0003) makes this mechanical.
 - Tenants get their secrets; the platform keeps Vault.

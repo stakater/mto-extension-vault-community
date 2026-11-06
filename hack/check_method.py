@@ -186,8 +186,11 @@ def git_show(root, ref, rel):
 
 
 def check_adr_diff(root, base):
+    # --no-renames: with rename detection, an Accepted ADR renamed and edited
+    # shows only under its new name, which the base doesn't have, so it read
+    # as a new ADR. Without it, the old name is a deletion, which fails.
     r = subprocess.run(
-        ["git", "-C", root, "diff", "--name-only", f"{base}...HEAD", "--", ADR_DIR],
+        ["git", "-C", root, "diff", "--no-renames", "--name-only", f"{base}...HEAD", "--", ADR_DIR],
         capture_output=True, text=True, check=True,
     )
     errors = []

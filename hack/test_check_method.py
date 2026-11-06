@@ -1,6 +1,7 @@
 """Table-driven tests for check_method.py (docs/method.md, "Enforced by")."""
 
 import os
+import subprocess
 import tempfile
 import textwrap
 import unittest
@@ -205,6 +206,39 @@ class AdrImmutability(unittest.TestCase):
                     self.assertEqual(errors, [], name)
                 else:
                     self.assertTrue(any(want in e for e in errors), f"{name}: {errors}")
+
+
+class AdrDiffInGit(unittest.TestCase):
+    """check_adr_diff on a real repository: what git reports is the input."""
+
+    def git(self, root, *args):
+        subprocess.run(["git", "-C", root, "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                       check=True, capture_output=True)
+
+    def test_renamed_and_edited_accepted_adr_fails(self):
+        with Repo({"docs/adr/0001-title.md": adr("Accepted")}) as root:
+            self.git(root, "init", "-q", "-b", "main")
+            self.git(root, "add", ".")
+            self.git(root, "commit", "-qm", "base")
+            self.git(root, "switch", "-q", "-c", "pr")
+            self.git(root, "mv", "docs/adr/0001-title.md", "docs/adr/0001-new-title.md")
+            with open(os.path.join(root, "docs/adr/0001-new-title.md"), "a", encoding="utf-8") as f:
+                f.write("\nOne more line, which git still calls a rename.\n")
+            self.git(root, "commit", "-qam", "rename and edit")
+            errors = cm.check_adr_diff(root, "main")
+            self.assertTrue(any("never deleted" in e for e in errors), errors)
+
+    def test_new_adr_passes(self):
+        with Repo({"docs/adr/0001-title.md": adr("Accepted")}) as root:
+            self.git(root, "init", "-q", "-b", "main")
+            self.git(root, "add", ".")
+            self.git(root, "commit", "-qm", "base")
+            self.git(root, "switch", "-q", "-c", "pr")
+            with open(os.path.join(root, "docs/adr/0002-next.md"), "w", encoding="utf-8") as f:
+                f.write(adr("Proposed"))
+            self.git(root, "add", ".")
+            self.git(root, "commit", "-qm", "new adr")
+            self.assertEqual(cm.check_adr_diff(root, "main"), [])
 
 
 class PrCitesStory(unittest.TestCase):

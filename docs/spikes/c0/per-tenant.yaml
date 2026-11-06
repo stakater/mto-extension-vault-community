@@ -1,0 +1,212 @@
+# C.0 question 17, end to end: every workload and share role of tenants.yaml
+# and q15-shares.yaml moved to the per-tenant auth mounts, each bound by
+# namespace name AND tenant label, through VCO with the type-pinned policy and
+# under the admission policies of q18-admission.yaml. The parent renders the
+# shared mount once (as the Enterprise parent renders the shared namespace's);
+# the tenant chart renders each tenant's. The policies are unchanged.
+# Run: delete the old role CRs (VCO refuses a spec.path change), apply this,
+# then MOUNTS=per-tenant ./acceptance.sh.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: team-a-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-a/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata: { name: team-a-kubernetes-config, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-a/kubernetes
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: team-b-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-b/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata: { name: team-b-kubernetes-config, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-b/kubernetes
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: team-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata: { name: team-kubernetes-config, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team/kubernetes
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: shared-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: shared/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata: { name: shared-kubernetes-config, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: shared/kubernetes
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-api.web, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-api.web
+  path: team-a/kubernetes/workloads
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-api, stakater.com/tenant: team-a }
+  policies: [kv.team-a.team-a-api.web]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-api.jobs, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-api.jobs
+  path: team-a/kubernetes/workloads
+  targetServiceAccounts: [jobs]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-api, stakater.com/tenant: team-a }
+  policies: [kv.team-a.team-a-api.jobs]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-worker.worker, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-worker.worker
+  path: team-a/kubernetes/workloads
+  targetServiceAccounts: [worker]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-worker, stakater.com/tenant: team-a }
+  policies: [kv.team-a.team-a-worker.worker]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-b.team-b-api.api, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-b.team-b-api.api
+  path: team-b/kubernetes/workloads
+  targetServiceAccounts: [api]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-b-api, stakater.com/tenant: team-b }
+  policies: [kv.team-b.team-b-api.api]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team.team-core.core, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team.team-core.core
+  path: team/kubernetes/workloads
+  targetServiceAccounts: [core]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-core, stakater.com/tenant: team }
+  policies: [kv.team.team-core.core]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team-a.team-a-api.web.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-a.team-a-api.web.out.team-b
+  path: shared/kubernetes/workloads
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-api, stakater.com/tenant: team-a }
+  policies: [share.team-a.team-a-api.web.out.team-b]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team-b.team-b-api.api.in.team-a, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team-b.team-b-api.api.in.team-a
+  path: shared/kubernetes/workloads
+  targetServiceAccounts: [api]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-b-api, stakater.com/tenant: team-b }
+  policies: [share.team-b.team-b-api.api.in.team-a]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: share.team.team-core.core.out.team-b, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: share.team.team-core.core.out.team-b
+  path: shared/kubernetes/workloads
+  targetServiceAccounts: [core]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-core, stakater.com/tenant: team }
+  policies: [share.team.team-core.core.out.team-b]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400

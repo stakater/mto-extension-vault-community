@@ -1,0 +1,3 @@
+{{- /* The install-wide value checks (installChecks in _helpers.tpl), run on
+       every render whatever is enabled. Emits no object. */ -}}
+{{- include "mto-extension-vault-community-bootstrap.installChecks" . }}

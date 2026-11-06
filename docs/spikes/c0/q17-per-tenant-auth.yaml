@@ -1,0 +1,51 @@
+# C.0 question 17: a Kubernetes auth mount per tenant, at Enterprise's path
+# with the tenant prefix: auth/<tenant>/kubernetes/workloads, rendered the way
+# the Enterprise tenant chart renders kubernetes/workloads inside the tenant's
+# namespace (01-tenant-scaffolding.yaml). VCO's policy gains
+# sys/auth/+/kubernetes/workloads (type pinned, delete allowed: an auth mount
+# holds grants, not data). Tenant "kubernetes" shows the reserved name.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: team-a-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-a/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata: { name: team-a-kubernetes-config, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: team-a/kubernetes
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.team-a.team-a-api.web.pt, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.team-a.team-a-api.web
+  path: team-a/kubernetes/workloads
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaceSelector:
+      matchLabels: { kubernetes.io/metadata.name: team-a-api, stakater.com/tenant: team-a }
+  policies: [kv.team-a.team-a-api.web]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata: { name: kubernetes-kubernetes, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  path: kubernetes/kubernetes
+  name: workloads
+  type: kubernetes
+  config: { listingVisibility: hidden }

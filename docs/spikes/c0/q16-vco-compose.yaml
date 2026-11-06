@@ -1,0 +1,24 @@
+# C.0 question 16: is VCO bounded by its name-narrowed policy? Two CRs whose
+# names pass it — a kv.* Policy that grants everything and a kv.* role bound to
+# any ServiceAccount — and a login with that role. The probes in
+# c0-findings.md write a new platform-named policy and read another tenant.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata: { name: kv.x.y.z, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.x.y.z
+  policy: |
+    path "*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata: { name: kv.x.y.z, namespace: vault-config }
+spec:
+  authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+  name: kv.x.y.z
+  path: mto/workloads
+  targetServiceAccounts: [app]
+  targetNamespaces: { targetNamespaces: [team-a-gone] }
+  policies: [kv.x.y.z]

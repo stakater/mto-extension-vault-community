@@ -1,0 +1,70 @@
+# The acceptance fixture (docs/acceptance.md) as plain Kubernetes objects:
+# tenant namespaces, their ServiceAccounts, and VCO's login ServiceAccount.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault-config
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vco-admin
+  namespace: vault-config
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-api
+  labels:
+    stakater.com/tenant: team-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-a-worker
+  labels:
+    stakater.com/tenant: team-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-b-api
+  labels:
+    stakater.com/tenant: team-b
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: team-core
+  labels:
+    stakater.com/tenant: team
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: web
+  namespace: team-a-api
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jobs
+  namespace: team-a-api
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: worker
+  namespace: team-a-worker
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api
+  namespace: team-b-api
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: core
+  namespace: team-core

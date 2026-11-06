@@ -1,0 +1,111 @@
+# What the bootstrap chart and the parent would render (design §3), by hand:
+# a KV mount per tenant at <tenant>/kv, the shared mount shared/kv, and the
+# shared workload auth mount mto/workloads (finding Q1b). No targetNamespace: every
+# object lands in root, the only namespace Community Edition has (V6).
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: team-a-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: team-a
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: team-b-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: team-b
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: team-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: team
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: shared-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: shared
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: AuthEngineMount
+metadata:
+  name: workloads
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: mto
+  name: workloads
+  type: kubernetes
+  config:
+    listingVisibility: hidden
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineConfig
+metadata:
+  name: workloads-config
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: mto
+  name: workloads
+  kubernetesHost: https://kubernetes.default.svc:443
