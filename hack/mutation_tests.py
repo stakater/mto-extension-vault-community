@@ -87,6 +87,8 @@ PROD_POLICY = "charts/examples/vco-admin-policy.hcl"
 LAB_POLICY = "hack/lab/vco-admin-policy.hcl"
 COVERS = "hack/vco_policy_covers.py"
 OFFLINE = "hack/admission-offline.sh"
+HARNESS = "hack/chart-render-tests.sh"
+RECIPES = "hack/makefile_recipes.py"
 POLICY_HEAD = ('  name: mto-extension-vault-community-vco-{}\nspec:\n  failurePolicy: Fail\n  matchConstraints:\n'
                '    namespaceSelector:\n      matchLabels: {{ kubernetes.io/metadata.name: {{{{ $cfg | quote }}}} }}\n'
                '    resourceRules:\n      - apiGroups: ["redhatcop.redhat.io"]\n        apiVersions: ["*"]\n'
@@ -369,6 +371,39 @@ MUTATIONS = [
     m("covers-unknown-kind", "method", COVERS,
       '    raise ValueError(f"{kind}: no Vault path is mapped for this kind (hack/vco_policy_covers.py)")\n',
       "    return []\n", "test_unknown_kind_fails"),
+    # ── DX.4: both forms of Helm's schema errors, and recipes GNU make breaks ──
+    m("schema-at-old", "render", HARNESS, """  grep -qF -- "- $2: " "$1" || grep -qF -- "- at '/${2//.//}': " "$1"\n""",
+      """  grep -qF -- "- at '/${2//.//}': " "$1"\n""", "schemaforms"),
+    m("schema-at-new", "render", HARNESS, """  grep -qF -- "- $2: " "$1" || grep -qF -- "- at '/${2//.//}': " "$1"\n""",
+      """  grep -qF -- "- $2: " "$1"\n""", "schemaforms"),
+    m("schema-root", "render", HARNESS, """  [ -n "$2" ] || { o="(root)"; s=""; }\n""", "  :\n", "schemaforms"),
+    m("schema-pattern-old", "render", HARNESS, """grep -qF -- "- $o: Does not match pattern" "$f" || grep""", "false || grep",
+      "schemaforms"),
+    m("schema-pattern-new", "render", HARNESS, """|| grep -qE -- "- at '$s': '.*' does not match pattern" "$f" ;;""",
+      "|| false ;;", "schemaforms"),
+    m("schema-unique-old", "render", HARNESS,
+      r'''    unique) grep -qE -- "- ${o//./\\.}: array items\[[0-9]+,[0-9]+\] must be unique" "$f" ''' + "\\\n",
+      "    unique) false \\\n", "schemaforms"),
+    m("schema-unique-new", "render", HARNESS,
+      """      || grep -qE -- "- at '$s': items at [0-9]+ and [0-9]+ are equal" "$f" ;;""", "      || false ;;",
+      "schemaforms"),
+    m("schema-additional-old", "render", HARNESS, """grep -qF -- "- $o: Additional property $4 is not allowed" "$f" || grep""",
+      "false || grep", "schemaforms"),
+    m("schema-additional-new", "render", HARNESS,
+      """|| grep -qF -- "- at '$s': additional properties '$4' not allowed" "$f" ;;""", "|| false ;;", "schemaforms"),
+    m("schema-required-old", "render", HARNESS, """grep -qF -- "- $o: $4 is required" "$f" || grep""", "false || grep",
+      "schemaforms"),
+    m("schema-required-new", "render", HARNESS, """|| grep -qF -- "- at '$s': missing property '$4'" "$f" ;;""",
+      "|| false ;;", "schemaforms"),
+    m("recipes-in-quote", "method", RECIPES, """        if continued and quote == "'":\n""", "        if False:\n",
+      "test_a_continuation_inside_single_quotes_is_found"),
+    m("recipes-double-quote", "method", RECIPES, """                if c in "'\\"":\n""", """                if c == "'":\n""",
+      "test_a_quote_inside_double_quotes_opens_nothing"),
+    m("recipes-comment", "method", RECIPES,
+      """.startswith("#"):\n            continue\n""", """.startswith("#"):\n            pass\n""",
+      "test_a_recipe_comment_is_skipped"),
+    m("recipes-carry", "method", RECIPES, "        if not continued:\n            quote = None\n",
+      "        if True:\n            quote = None\n", "test_a_quote_open_over_two_continued_lines_is_found_on_each"),
     # ── This runner's own rules ──
     m("runner-ambiguous", "method", "hack/mutation_tests.py", '\n    if mut["count"] == 1 and n > 1:\n',
       "\n    if False:\n", "test_count_one_with_two_matches_fails"),

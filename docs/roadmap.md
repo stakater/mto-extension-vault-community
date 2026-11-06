@@ -439,6 +439,25 @@ time, and still fails with the same message when Dex never answers; the lab
 builds from zero. Planning:
 [`planning/DX3-lab-dex-check.md`](planning/DX3-lab-dex-check.md).
 
+**Story DX.4 — CI is green on Linux** 🔨 *In progress*
+
+As a reviewer, I want the PR's Verify and Kind E2E checks to pass in CI, so
+that a green local run means a green CI run.
+
+Approved by Ayesha Arshad on 2026-11-06 ("yes").
+
+Found on 2026-11-06. CI Verify failed from b59afe7 to 7521bb9: CI runs the
+pinned Helm v3.19.0, which writes schema errors in another form than Helm
+3.14, and six render checks matched the 3.14 text. The first Kind E2E run in
+CI failed in `lab-dex`: GNU make 4 keeps a backslash-newline inside single
+quotes, so jq got `\` in the Dex config program; macOS make 3.81 removes it.
+
+Done: the render checks accept the schema errors of Helm 3.14 and of the
+pinned Helm, and `make verify` passes with both; the Dex config program is a
+jq file, and a test fails on a recipe line continued inside single quotes;
+`lab-dex` writes the same config under GNU make 4 and make 3.81; CI Verify and
+Kind E2E pass on the PR.
+
 ---
 
 ## Not on the roadmap (non-goals)

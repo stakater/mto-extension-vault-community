@@ -485,19 +485,14 @@ lab-dex: helm ## Install Dex, connected to the lab Keycloak; its config is built
 			--from-literal=client-secret="$$(openssl rand -hex 24)"
 	@# The config as JSON (a subset of YAML, which Dex reads), with both client
 	@# secrets read from their Secrets inside jq: none passes through the shell.
+	@# The program is a file: GNU make keeps a backslash-newline inside quotes
+	@# (DX.4; hack/test_makefile_recipes.py).
 	@kc_secret=$$($(KC) -n $(KEYCLOAK_NS) get secret keycloak-dex-client -o json) || exit 1; \
 	vault_secret=$$($(KC) -n $(DEX_NS) get secret dex-vault-client -o json) || exit 1; \
 	jq -n --argjson kc "$$kc_secret" --argjson vc "$$vault_secret" \
 		--arg issuer "$(DEX_ISSUER)" --arg kcurl "$(KEYCLOAK_URL)" --arg cli "$(CLI_CALLBACK)" \
 		--arg ui "$(UI_CALLBACK)" --arg tenants "$(DEX_TENANTS)" --arg ns "$(DEX_NS)" \
-		'{apiVersion: "v1", kind: "Secret", type: "Opaque", metadata: {name: "dex-config", namespace: $$ns}, \
-		  stringData: {"config.yaml": ({issuer: $$issuer, storage: {type: "memory"}, web: {http: "0.0.0.0:5556"}, \
-		    oauth2: {skipApprovalScreen: true}, \
-		    connectors: [{type: "oidc", id: "keycloak", name: "Keycloak", config: {issuer: ($$kcurl + "/realms/mto"), \
-		      clientID: "dex", clientSecret: ($$kc.data["client-secret"] | @base64d), redirectURI: ($$issuer + "/callback"), \
-		      scopes: ["openid", "profile", "email"], insecureEnableGroups: true}}], \
-		    staticClients: [{id: "vault", name: "Vault", secret: ($$vc.data["client-secret"] | @base64d), \
-		      redirectURIs: ([$$cli] + ($$tenants | split(" ") | map(select(. != "")) | map(. as $$t | $$ui | sub("\\{tenant\\}"; $$t))))}]} | tojson)}}' \
+		-f hack/lab/dex-config.jq \
 		| $(KC) apply -f - >/dev/null
 	$(HELM) repo add dex https://charts.dexidp.io --force-update >/dev/null
 	$(HELM) upgrade --install dex dex/dex --version $(DEX_CHART_VERSION) \

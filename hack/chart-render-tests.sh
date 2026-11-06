@@ -155,6 +155,9 @@
 #                  (additionalProperties: false), found by walking the schema,
 #                  a misspelt key fails; the walk finds exactly the pinned
 #                  list of objects; the required objects can't be nulled.
+#   schemaforms  — schema_at and schema_rule read Helm's schema errors in both
+#                  forms (before and after Helm 3.18), on fixed lines: CI runs
+#                  one Helm, so the other form is proven here (DX.4).
 #   tenantvaluekeys — the bootstrap schema's tenantValues keys (top level, sso,
 #                  sso.oidc, sso.mount, monitoring) are the tenant chart's
 #                  values.yaml keys, plus the removed ones whose guards name the
@@ -246,6 +249,25 @@ check() { # check <name> <ok:0|1> [detail]
   fi
 }
 first() { head -1 "$1" | cut -c1-160; }
+# Helm's schema errors name the field and the rule in one of two forms: Helm
+# before 3.18 (gojsonschema) writes "- a.b: <message>", Helm 3.18 and later
+# (jsonschema v6) "- at '/a/b': <message>". CI runs the Makefile's pinned Helm
+# and HELM_MIN allows the older one, so a check accepts both (DX.4).
+schema_at() { # schema_at <err file> <a.b>: a schema error names this field
+  grep -qF -- "- $2: " "$1" || grep -qF -- "- at '/${2//.//}': " "$1"
+}
+schema_rule() { # schema_rule <err file> <a.b, or "" for the root> <rule> [arg]: the field fails this rule
+  local f=$1 o=$2 s="/${2//.//}"
+  [ -n "$2" ] || { o="(root)"; s=""; }
+  case $3 in
+    pattern) grep -qF -- "- $o: Does not match pattern" "$f" || grep -qE -- "- at '$s': '.*' does not match pattern" "$f" ;;
+    unique) grep -qE -- "- ${o//./\\.}: array items\[[0-9]+,[0-9]+\] must be unique" "$f" \
+      || grep -qE -- "- at '$s': items at [0-9]+ and [0-9]+ are equal" "$f" ;;
+    additional) grep -qF -- "- $o: Additional property $4 is not allowed" "$f" || grep -qF -- "- at '$s': additional properties '$4' not allowed" "$f" ;;
+    required) grep -qF -- "- $o: $4 is required" "$f" || grep -qF -- "- at '$s': missing property '$4'" "$f" ;;
+    *) echo "schema_rule: no rule '$3'" >&2; return 2 ;;
+  esac
+}
 # yqs <var> <expr> <file>: run yq to completion into <var>. A yq error stops the
 # run: it must never read as an empty result, which is the pass condition of
 # every "must not contain" check. Never pipe a producer into `grep -q` here —
@@ -857,7 +879,7 @@ sg_tenant one-group 'sso: {tenantGroupTemplate: "{tenant}"}' 'bind the same grou
 sg_tenant ttl 'token: {ttl: 7200, maxTTL: 3600}' 'is over token.maxTTL'
 sg_tenant mapped 'sso: {tenantRoleMapping: {admin: {pattern: "ops-{tenant}"}}}' ok
 sg_tenant roles-empty 'sso: {roles: []}' 'with an empty sso.roles'
-sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message> [chart dir] [other values YAML]
+sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message | schema:<rule>:<a.b>> [chart dir] [other values YAML]
   printf 'tenantValues: %s\n' "$2" > "$WORK/sg-boot.yaml"
   [ -z "${5:-}" ] || printf '%s\n' "$5" >> "$WORK/sg-boot.yaml"
   if "$HELM" template b "${4:-$BOOTSTRAP}" -n "$NS" -f "$WORK/sg-boot.yaml" > /dev/null 2>"$WORK/sg.err"; then
@@ -865,7 +887,10 @@ sg_boot() { # sg_boot <label> <tenantValues YAML> <expect: ok | message> [chart 
   elif [ "$3" = ok ]; then
     sg_ok=1; sg_detail="$sg_detail [bootstrap $1 failed: $(first "$WORK/sg.err")]"
   else
-    grep -qF -- "$3" "$WORK/sg.err" || { sg_ok=1; sg_detail="$sg_detail [bootstrap $1 failed elsewhere: $(first "$WORK/sg.err")]"; }
+    case $3 in
+      schema:*) local r=${3#schema:}; schema_rule "$WORK/sg.err" "${r#*:}" "${r%%:*}" ;;
+      *) grep -qF -- "$3" "$WORK/sg.err" ;;
+    esac || { sg_ok=1; sg_detail="$sg_detail [bootstrap $1 failed elsewhere: $(first "$WORK/sg.err")]"; }
   fi
 }
 rc='roleCaps: {read: "[\"read\"]", a: "[\"read\"]", b: "[\"read\"]"}'
@@ -900,7 +925,7 @@ sg_boot unknown-role '{sso: {tenantRoleMapping: {ops: {pattern: "ops-{tenant}"}}
 sg_boot fallback-allow '{sso: {tenantRoleMapping: {fallback: allow}}}' 'It must be "deny"'
 sg_boot role-fallback '{roleCaps: {fallback: "[\"read\"]"}, sso: {roles: [admin, fallback]}}' 'entry "fallback" is reserved'
 sg_boot role-twice '{sso: {roles: [admin, admin]}}' 'lists "admin" twice' "$WORK/noschema/boot"
-sg_boot role-twice-schema '{sso: {roles: [admin, admin]}}' 'array items[0,1] must be unique'
+sg_boot role-twice-schema '{sso: {roles: [admin, admin]}}' 'schema:unique:tenantValues.sso.roles'
 sg_boot role-no-caps '{sso: {roles: [admin, ops]}}' 'has no roleCaps entry'
 sg_boot caps-sudo '{roleCaps: {admin: "[\"read\", \"sudo\"]"}}' 'grants sudo'
 sg_boot caps-shape '{roleCaps: {admin: "read, list"}}' 'is not one capability list'
@@ -1207,7 +1232,7 @@ grep -q '"role":"vco-role"' <<<"$pauth" && grep -q '"name":"vco-sa"' <<<"$pauth"
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
   nt_ok=1; nt_detail="$nt_detail [the bootstrap accepted vco.namespace]"
 else
-  grep -qF -- '- vco: Additional property namespace is not allowed' "$WORK/nt.err" \
+  schema_rule "$WORK/nt.err" vco additional namespace \
     || { nt_ok=1; nt_detail="$nt_detail [the bootstrap's vco.namespace failed elsewhere: $(first "$WORK/nt.err")]"; }
 fi
 if render core "$FIXTURES/values-full.yaml" --set vco.namespace=org > /dev/null 2>"$WORK/nt.err"; then
@@ -1265,7 +1290,7 @@ done
 if "$HELM" template b "$BOOTSTRAP" -n "$NS" --set-string tenantValues.monitoring.enabled=yes > /dev/null 2>"$WORK/boot.err"; then
   rg_ok=1; rg_detail="$rg_detail [tenantValues.monitoring.enabled=yes accepted]"
 else
-  grep -qF -- '- tenantValues.monitoring.enabled: ' "$WORK/boot.err" \
+  schema_at "$WORK/boot.err" tenantValues.monitoring.enabled \
     || { rg_ok=1; rg_detail="$rg_detail [tenantValues.monitoring.enabled=yes failed elsewhere: $(first "$WORK/boot.err")]"; }
 fi
 check rbacgate "$rg_ok" "$rg_detail"
@@ -1295,20 +1320,20 @@ check rbaccover "$rc_ok" "$rc_detail"
 
 # toggles — schema with templates stripped, helpers with the schema removed
 tg_ok=0; tg_detail=""
-tg_case() { # tg_case <chart-dir-name> <values-arg> <label> <helper message> <schema message>
-  local variant want
+tg_case() { # tg_case <chart-dir-name> <values-arg> <label> <helper message> <schema field>
+  local variant
   for variant in noschema notpl; do
-    if [ "$variant" = noschema ]; then want=$4; else want=$5; fi
     if "$HELM" template x "$WORK/$variant/$1" -n "$NS" $2 > /dev/null 2>"$WORK/tg.err"; then
       tg_ok=1; tg_detail="$tg_detail [$3 accepted with $variant]"
     else
-      grep -qF -- "$want" "$WORK/tg.err" || { tg_ok=1; tg_detail="$tg_detail [$3 with $variant failed elsewhere: $(first "$WORK/tg.err")]"; }
+      if [ "$variant" = noschema ]; then grep -qF -- "$4" "$WORK/tg.err"; else schema_at "$WORK/tg.err" "$5"; fi \
+        || { tg_ok=1; tg_detail="$tg_detail [$3 with $variant failed elsewhere: $(first "$WORK/tg.err")]"; }
     fi
   done
 }
-tg_case boot "--set parent.eso=true" "parent.eso=true" 'parent.eso must be "enabled" or "disabled"' '- parent.eso: '
-tg_case boot "--set parent.sso.enabled=yes" "parent.sso.enabled=yes" 'parent.sso.enabled must be a boolean true or false' '- parent.sso.enabled: '
-tg_case boot "--set-string sync.mode=on" "sync.mode=on" 'sync.mode must be one of off, revert, strict' '- sync.mode: '
+tg_case boot "--set parent.eso=true" "parent.eso=true" 'parent.eso must be "enabled" or "disabled"' parent.eso
+tg_case boot "--set parent.sso.enabled=yes" "parent.sso.enabled=yes" 'parent.sso.enabled must be a boolean true or false' parent.sso.enabled
+tg_case boot "--set-string sync.mode=on" "sync.mode=on" 'sync.mode must be one of off, revert, strict' sync.mode
 for variant in noschema notpl; do
   "$HELM" template x "$WORK/$variant/boot" -n "$NS" --set parent.eso=disabled --set-string parent.sso.enabled=true --set parent.sso.issuerUrl=https://idp > /dev/null 2>"$WORK/tg.err" \
     || { tg_ok=1; tg_detail="$tg_detail [canonical bootstrap values rejected with $variant: $(first "$WORK/tg.err")]"; }
@@ -1476,7 +1501,7 @@ while IFS='|' read -r field c; do
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
     iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
   else
-    grep -qF -- "- $field: " "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
+    schema_at "$WORK/iv.err" "$field" || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
   fi
 done <<'TABLE'
 tenantValues.roleCaps|tenantValues: {roleCaps: null}
@@ -1505,7 +1530,7 @@ while IFS='|' read -r field c; do
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/iv.yaml" > /dev/null 2>"$WORK/iv.err"; then
     iv_ok=1; iv_detail="$iv_detail [the schema accepted $c]"
   else
-    grep -qF -- "- $field: Does not match pattern" "$WORK/iv.err" || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
+    schema_rule "$WORK/iv.err" "$field" pattern || { iv_ok=1; iv_detail="$iv_detail [$c failed elsewhere: $(grep -m1 -- '^- ' "$WORK/iv.err" || first "$WORK/iv.err")]"; }
   fi
 done <<'TABLE'
 templateOperator.namespace|templateOperator: {namespace: ""}
@@ -1580,11 +1605,39 @@ for obj in vco kubernetesAuth templateOperator tenantChart parent; do
   if "$HELM" template b "$WORK/notpl/boot" -n "$NS" -f "$WORK/sk-null.yaml" > /dev/null 2>"$WORK/sk.err"; then
     sk_ok=1; sk_detail="$sk_detail [the schema accepted $obj: null]"
   else
-    grep -qF -- "- (root): $obj is required" "$WORK/sk.err" \
+    schema_rule "$WORK/sk.err" "" required "$obj" \
       || { sk_ok=1; sk_detail="$sk_detail [$obj: null failed elsewhere: $(first "$WORK/sk.err")]"; }
   fi
 done
 check schemakeys "$sk_ok" "$sk_detail"
+
+# schemaforms — the schema helpers on fixed lines of both Helm forms, and a
+# near miss of each (another field, another rule): CI runs one Helm version,
+# so the other form's branch is proven here, not by the checks above (DX.4).
+sf_ok=0; sf_detail=""
+sf_e="$WORK/sf.err"
+sf() { # sf <want: yes|no> <error line> <helper call, with $sf_e as its file>
+  local want=$1 line=$2 got; shift 2
+  printf '%s\n' "$line" > "$sf_e"
+  if "$@"; then got=yes; else got=no; fi
+  [ "$got" = "$want" ] || { sf_ok=1; sf_detail="$sf_detail [$1 ${*:3} on '$line': $got, want $want]"; }
+}
+sf yes "- parent.eso: Invalid type. Expected: string, given: boolean" schema_at "$sf_e" parent.eso
+sf yes "- at '/parent/eso': got boolean, want string" schema_at "$sf_e" parent.eso
+sf no "- at '/parent/esoX': got boolean, want string" schema_at "$sf_e" parent.eso
+sf yes "- tenantValues.sso.roles: array items[0,1] must be unique" schema_rule "$sf_e" tenantValues.sso.roles unique
+sf yes "- at '/tenantValues/sso/roles': items at 0 and 1 are equal" schema_rule "$sf_e" tenantValues.sso.roles unique
+sf no "- at '/tenantValues/sso/rolesX': items at 0 and 1 are equal" schema_rule "$sf_e" tenantValues.sso.roles unique
+sf yes "- vco: Additional property namespace is not allowed" schema_rule "$sf_e" vco additional namespace
+sf yes "- at '/vco': additional properties 'namespace' not allowed" schema_rule "$sf_e" vco additional namespace
+sf no "- at '/vco': additional properties 'role' not allowed" schema_rule "$sf_e" vco additional namespace
+sf yes "- (root): vco is required" schema_rule "$sf_e" "" required vco
+sf yes "- at '': missing property 'vco'" schema_rule "$sf_e" "" required vco
+sf no "- at '': missing property 'parent'" schema_rule "$sf_e" "" required vco
+sf yes "- configNamespace: Does not match pattern '^[a-z]'" schema_rule "$sf_e" configNamespace pattern
+sf yes "- at '/configNamespace': 'V' does not match pattern '^[a-z]'" schema_rule "$sf_e" configNamespace pattern
+sf no "- at '/configNamespace': got number, want string" schema_rule "$sf_e" configNamespace pattern
+check schemaforms "$sf_ok" "$sf_detail"
 
 # tenantvaluekeys — the bootstrap schema's tenantValues keys are the tenant
 # chart's values.yaml keys, plus the removed keys whose guards name the fix.
