@@ -1,0 +1,256 @@
+# What the per-tenant chart would render (design §3), by hand, for the
+# acceptance fixture. The policies are the Enterprise chart's
+# (templates/04-sa-own-tenant.yaml, 07-sso-policies.yaml) with one change:
+# every path starts at root with the tenant mount, <tenant>/kv/, where the
+# Enterprise chart starts at kv/ inside the tenant's Vault namespace.
+#
+# Tiers (Enterprise roleCaps): viewer ["read", "list"];
+# editor ["create", "read", "update", "patch", "list"];
+# admin ["create", "read", "update", "patch", "delete", "list"].
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team-a.team-a-api.web
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-api.web
+  policy: |
+    path "team-a/kv/data/dev/team-a-api/web/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/team-a-api/web/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-api/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-api/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-api/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-api/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team-a.team-a-api.jobs
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-api.jobs
+  policy: |
+    path "team-a/kv/data/dev/team-a-api/jobs/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/team-a-api/jobs/*" { capabilities = ["read", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-api/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-api/*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team-a.team-a-worker.worker
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-worker.worker
+  policy: |
+    path "team-a/kv/data/dev/team-a-worker/worker/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/team-a-worker/worker/*" { capabilities = ["read", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-worker/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-worker/*" { capabilities = ["read", "list"] }
+    path "team-a/kv/data/dev/_shared/from-team-a-api/*"     { capabilities = ["read", "list"] }
+    path "team-a/kv/metadata/dev/_shared/from-team-a-api/*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team-b.team-b-api.api
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-b.team-b-api.api
+  policy: |
+    path "team-b/kv/data/dev/team-b-api/api/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-b/kv/metadata/dev/team-b-api/api/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-b/kv/data/dev/_shared/from-team-b-api/*"     { capabilities = ["read", "list"] }
+    path "team-b/kv/metadata/dev/_shared/from-team-b-api/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-b/kv/data/dev/_shared/from-team-b-api/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-b/kv/metadata/dev/_shared/from-team-b-api/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: kv.team.team-core.core
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team.team-core.core
+  policy: |
+    path "team/kv/data/dev/team-core/core/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team/kv/metadata/dev/team-core/core/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team/kv/delete/dev/team-core/core/*"   { capabilities = ["update"] }
+    path "team/kv/undelete/dev/team-core/core/*" { capabilities = ["update"] }
+    path "team/kv/destroy/dev/team-core/core/*"  { capabilities = ["update"] }
+    path "team/kv/data/dev/_shared/from-team-core/*"     { capabilities = ["read", "list"] }
+    path "team/kv/metadata/dev/_shared/from-team-core/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team/kv/data/dev/_shared/from-team-core/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team/kv/metadata/dev/_shared/from-team-core/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team/kv/delete/dev/_shared/from-team-core/*"   { capabilities = ["update"] }
+    path "team/kv/undelete/dev/_shared/from-team-core/*" { capabilities = ["update"] }
+    path "team/kv/destroy/dev/_shared/from-team-core/*"  { capabilities = ["update"] }
+---
+# SSO tier policies. The spike has no identity provider, so question 4 and
+# AC-ISO-9 use tokens made with these policies instead of an OIDC login.
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: sso.team-a.editor
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: sso.team-a.editor
+  policy: |
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/data/dev/*"     { capabilities = ["create", "read", "update", "patch", "list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["create", "read", "update", "patch", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: sso.team-a.admin
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: sso.team-a.admin
+  policy: |
+    path "team-a/kv/metadata" { capabilities = ["list"] }
+    path "team-a/kv/data/dev/*"     { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/metadata/dev/*" { capabilities = ["create", "read", "update", "patch", "delete", "list"] }
+    path "team-a/kv/delete/dev/*"   { capabilities = ["update"] }
+    path "team-a/kv/undelete/dev/*" { capabilities = ["update"] }
+    path "team-a/kv/destroy/dev/*"  { capabilities = ["update"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team-a.team-a-api.web
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-api.web
+  path: mto/workloads
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaces: [team-a-api]
+  policies: [kv.team-a.team-a-api.web]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team-a.team-a-api.jobs
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-api.jobs
+  path: mto/workloads
+  targetServiceAccounts: [jobs]
+  targetNamespaces:
+    targetNamespaces: [team-a-api]
+  policies: [kv.team-a.team-a-api.jobs]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team-a.team-a-worker.worker
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-a.team-a-worker.worker
+  path: mto/workloads
+  targetServiceAccounts: [worker]
+  targetNamespaces:
+    targetNamespaces: [team-a-worker]
+  policies: [kv.team-a.team-a-worker.worker]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team-b.team-b-api.api
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team-b.team-b-api.api
+  path: mto/workloads
+  targetServiceAccounts: [api]
+  targetNamespaces:
+    targetNamespaces: [team-b-api]
+  policies: [kv.team-b.team-b-api.api]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: kv.team.team-core.core
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.team.team-core.core
+  path: mto/workloads
+  targetServiceAccounts: [core]
+  targetNamespaces:
+    targetNamespaces: [team-core]
+  policies: [kv.team.team-core.core]
+  tokenType: service
+  tokenTTL: 3600
+  tokenMaxTTL: 14400

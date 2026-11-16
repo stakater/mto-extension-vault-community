@@ -1,0 +1,37 @@
+# Question 6 and AC-DEL-1: what slice eso would render for `web`, by hand.
+# The Enterprise SecretStore has path: kv and namespace: <tenant>; here the
+# path is the full mount path from root and there is no namespace.
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: web-vault
+  namespace: team-a-api
+spec:
+  provider:
+    vault:
+      server: http://vault.vault.svc:8200
+      path: team-a/kv
+      version: v2
+      auth:
+        kubernetes:
+          mountPath: mto/workloads
+          role: kv.team-a.team-a-api.web
+          serviceAccountRef:
+            name: web
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: web-db-creds
+  namespace: team-a-api
+spec:
+  refreshInterval: 15s
+  secretStoreRef:
+    name: web-vault
+    kind: SecretStore
+  target:
+    name: web-db-creds
+    creationPolicy: Owner
+  dataFrom:
+    - extract:
+        key: dev/team-a-api/web/postgres

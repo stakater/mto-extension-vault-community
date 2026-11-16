@@ -1,0 +1,101 @@
+# C.0 question 5, second part: does a VCO error reach the TemplateInstance's
+# outputs? Template Operator v2 is built from its main branch (0b89c9b) and
+# deployed with its default RBAC plus the Role below: VCO kinds in
+# vault-config only, and a cluster-wide list for its orphan discovery (the
+# Enterprise bootstrap chart's 00-rbac.yaml, reduced to what this test renders).
+#
+# The Template renders three VCO CRs: a tenant mount that works, a tenant mount
+# that collides with Vault's own agent-registry/ mount (400), and a Policy
+# named vco-admin that VCO's narrowed policy refuses (403). Its outputs are the
+# Enterprise vcoOutputs helper, unchanged.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: c0-tov2-vco-list
+rules:
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: ["secretenginemounts", "policies"]
+    verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: c0-tov2-vco-list
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: c0-tov2-vco-list }
+subjects:
+  - { kind: ServiceAccount, name: template-operator-v2-controller-manager, namespace: template-operator-v2-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: c0-tov2-vco-manager
+  namespace: vault-config
+rules:
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: ["secretenginemounts", "policies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: c0-tov2-vco-manager
+  namespace: vault-config
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: c0-tov2-vco-manager }
+subjects:
+  - { kind: ServiceAccount, name: template-operator-v2-controller-manager, namespace: template-operator-v2-system }
+---
+apiVersion: templates.v2.stakater.com/v2alpha1
+kind: Template
+metadata:
+  name: c0-q5-outputs
+  namespace: vault-config
+spec:
+  targetNamespaces:
+    explicit:
+      allow:
+        literal: [vault-config]
+  outputs:
+    - name: secretEngineMount
+      fromAll: { apiVersion: redhatcop.redhat.io/v1alpha1, kind: SecretEngineMount, namespace: vault-config }
+      keyTemplate: "{.metadata.name}"
+      fields:
+        - { name: secretEngineMountSucceeded, jsonPath: "{.status.conditions[?(@.type=='ReconcileSuccessful')].status}" }
+        - { name: secretEngineMountLastError, jsonPath: "{.status.conditions[?(@.type=='ReconcileFailed')].message}" }
+    - name: policy
+      fromAll: { apiVersion: redhatcop.redhat.io/v1alpha1, kind: Policy, namespace: vault-config }
+      keyTemplate: "{.metadata.name}"
+      fields:
+        - { name: policySucceeded, jsonPath: "{.status.conditions[?(@.type=='ReconcileSuccessful')].status}" }
+        - { name: policyLastError, jsonPath: "{.status.conditions[?(@.type=='ReconcileFailed')].message}" }
+  gotemplate: |
+    {{- range $t := list "tidemo" "agent-registry" }}
+    ---
+    apiVersion: redhatcop.redhat.io/v1alpha1
+    kind: SecretEngineMount
+    metadata: { name: {{ printf "ti-%s-kv" $t | quote }}, namespace: vault-config }
+    spec:
+      authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+      path: {{ $t | quote }}
+      name: kv
+      type: kv
+      config: { listingVisibility: hidden }
+      options: { version: "2" }
+    {{- end }}
+    ---
+    apiVersion: redhatcop.redhat.io/v1alpha1
+    kind: Policy
+    metadata: { name: ti-vco-admin, namespace: vault-config }
+    spec:
+      authentication: { path: kubernetes, role: vco-admin, serviceAccount: { name: vco-admin } }
+      name: vco-admin
+      policy: |
+        path "*" { capabilities = ["sudo", "create", "read", "update", "delete", "list"] }
+---
+apiVersion: templates.v2.stakater.com/v2alpha1
+kind: TemplateInstance
+metadata:
+  name: c0-q5-outputs
+  namespace: vault-config
+spec:
+  templateRef: { name: c0-q5-outputs, namespace: vault-config }

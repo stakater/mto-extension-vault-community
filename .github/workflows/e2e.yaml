@@ -1,0 +1,99 @@
+name: E2E
+
+# Not on every push. The suite builds a whole kind cluster — cert-manager,
+# template-operator-v2, External Secrets, Reloader, Vault Community Edition,
+# vault-config-operator (the Makefile's VCO_VERSION release) — which takes far
+# longer than `make verify`. So it runs when a human asks for it: on approval,
+# by adding the label, or by dispatch.
+#
+# Inputs beyond the code: none. Vault Community Edition needs no licence, and
+# template-operator-v2 comes from its public chart (TOV2_FROM=chart: the runner
+# has no template-operator-v2 checkout).
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [labeled]
+  workflow_dispatch:
+
+jobs:
+  verify-label:
+    name: Verify Label
+    # An approval-triggered run executes PR-authored code, so the approver must
+    # be an OWNER/MEMBER/COLLABORATOR. Applying the label needs triage; a
+    # dispatch needs write.
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.review.state == 'approved' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) || github.event.label.name == 'ok-to-test/kubernetes' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      # An approval is for one commit (review.commit_id). The e2e job tests
+      # the PR as it was when the event came, so a push between the review
+      # page loading and the approval would run code nobody approved: the
+      # approval must be for the head commit.
+      - name: The approval is for the head commit
+        if: ${{ github.event_name == 'pull_request_review' }}
+        env:
+          APPROVED: ${{ github.event.review.commit_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -z "$APPROVED" ] || [ "$APPROVED" != "$HEAD_SHA" ]; then
+            echo "::error::the approval is for '$APPROVED', but the PR's head is '$HEAD_SHA': approve the head commit to run the suite"
+            exit 1
+          fi
+      # Removed so the next run needs a fresh request. Pinned by SHA: this job
+      # holds pull-requests: write.
+      - name: Remove the test label
+        if: ${{ github.event.label.name == 'ok-to-test/kubernetes' }}
+        continue-on-error: true
+        uses: actions-ecosystem/action-remove-labels@2ce5d41b4b6aa8503e285553f75ed56e0a40bae0 # v1
+        with:
+          labels: ok-to-test/kubernetes
+
+  e2e:
+    name: Kind E2E
+    needs: verify-label
+    runs-on: ubuntu-latest
+    # Above the lab build plus the suite's own go test timeout (E2E_GO_TIMEOUT
+    # in the Makefile, 45m): a hung suite must fail in go test, so that
+    # e2e-diagnostics still runs and the artifact upload has something to send.
+    timeout-minutes: 90
+    # Job-level, not workflow-level: every label added to a PR starts this
+    # workflow, and a workflow-level group cancelled the running suite even when
+    # the new run's verify-label skipped. A skipped job never joins the group.
+    concurrency:
+      group: e2e-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+    # The pinned helm and yq, not the runner image's.
+    env:
+      HELM: ${{ github.workspace }}/bin/helm
+      YQ_BIN: ${{ github.workspace }}/bin/yq
+      TOV2_FROM: chart
+    permissions:
+      contents: read
+    steps:
+      # No ref: the default is the event's own commit (github.sha). For
+      # pull_request_review and pull_request that is the PR's merge commit as
+      # it was when the approval or the label came; verify-label refuses an
+      # approval of another commit than that head, so the run tests what was
+      # approved. A ref of refs/pull/<n>/merge would be resolved at checkout
+      # time and test whatever was pushed after the approval.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build the lab and run the suite
+        run: make e2e-kind
+
+      # e2e-kind writes these on any failure in the chain.
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs-${{ github.run_id }}
+          path: ./e2e-logs/
+          retention-days: 7
+          if-no-files-found: warn

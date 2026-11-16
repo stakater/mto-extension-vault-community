@@ -58,9 +58,9 @@ three.
   policies and roles are derived, not configured, and every policy is checked
   to stay inside its tenant — so the one wall Community Edition has is never
   written by hand.
-- **The same developer experience on every edition.** Same annotations, tiers,
+- **The same developer experience on every edition.** Same annotations, roles,
   names and ConfigMap keys as the Enterprise and OpenBao extensions.
-- **Tenants never administer Vault.** No tier can write a policy, mount an
+- **Tenants never administer Vault.** No role can write a policy, mount an
   engine, or touch auth configuration — the shared Vault stays the platform's.
 - **No new tool to learn.** It is Vault underneath. The extension writes the
   configuration; Vault enforces it.
@@ -76,8 +76,10 @@ three.
 
 ## Non-goals
 
-- Emulating Vault namespaces. No per-tenant auth methods, audit devices,
-  identity stores or delegated policy administration.
+- Emulating Vault namespaces. No per-tenant audit devices, identity stores
+  or delegated policy administration. Each tenant does get its own auth
+  mounts, as on Enterprise, so that offboarding revokes its tokens; the
+  extension configures them, never the tenant.
 - Tenant-managed policies, mounts or auth configuration (see ADR-0004).
 - Per-tenant quotas beyond what Community Edition offers (rate limits by source
   address only; lease-count quotas are Enterprise).
@@ -93,4 +95,4 @@ three.
 - An application gets a secret into a pod with two annotations and no Vault
   code, on Community Edition, end to end.
 - The contract check against the Enterprise chart finds no difference in
-  annotation keys, tiers, object names or ConfigMap keys.
+  annotation keys, roles, object names or ConfigMap keys.

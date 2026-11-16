@@ -1,0 +1,7 @@
+{{- /* The value guards, run on every render, whatever the tenant has
+       annotated: an unknown component, a removed key, a tenant name that is
+       not a DNS label or that makes a TemplateInstance name over 63 chars.
+       Without this file a tenant with nothing annotated renders nothing, and
+       a bad value says nothing. Emits no object. */ -}}
+{{- $_ := include "vault.componentEnabled" (dict "component" "core" "ctx" .) }}
+{{- $_ := include "vault.labels" . }}

@@ -1,0 +1,60 @@
+# Question 5: tenants named like an existing mount (secret, from Vault dev
+# mode), like the mount Vault 2.1.1 adds on its own (agent-registry), and like
+# the proposed auth prefix (mto). Rendered as the parent would render them.
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: secret-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: secret
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: agent-registry-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: agent-registry
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: SecretEngineMount
+metadata:
+  name: mto-kv
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  path: mto
+  name: kv
+  type: kv
+  config:
+    listingVisibility: hidden
+  options:
+    version: "2"

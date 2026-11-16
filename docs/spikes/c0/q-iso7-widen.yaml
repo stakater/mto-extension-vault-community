@@ -1,0 +1,49 @@
+# AC-ISO-7: CRs that try to widen VCO through VCO. With the narrowed policy,
+# Vault must refuse each one and VCO must report the error on the CR.
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: widen-vco-admin
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: vco-admin
+  policy: |
+    path "*" { capabilities = ["create", "read", "update", "delete", "list", "sudo"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: Policy
+metadata:
+  name: widen-default
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: default
+  policy: |
+    path "*" { capabilities = ["read", "list"] }
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: KubernetesAuthEngineRole
+metadata:
+  name: widen-vco-login
+  namespace: vault-config
+spec:
+  authentication:
+    path: kubernetes
+    role: vco-admin
+    serviceAccount:
+      name: vco-admin
+  name: kv.evil.vco-login
+  path: kubernetes
+  targetServiceAccounts: [web]
+  targetNamespaces:
+    targetNamespaces: [team-a-api]
+  policies: [vco-admin]

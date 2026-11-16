@@ -1,7 +1,7 @@
 # ADR-0003: The policy is the wall, so every policy is checked
 
-- **Status:** Proposed
-- **Date:** 2026-10-03
+- **Status:** Accepted
+- **Date:** 2026-10-03; revised 2026-11-02 after story C.0; accepted 2026-11-03
 
 ## Context
 
@@ -17,14 +17,18 @@ namespace and ServiceAccount, not the tenant (P3).
 
 - **Per-identity policies, as in Enterprise:** one policy and role per
   annotated ServiceAccount, scoped to its own app's prefix; tenant-wide scope
-  only for people's SSO tiers.
+  only for people's SSO roles.
 - **Every rendered policy passes the scope check** (design §4): every path
-  inside the tenant's mount or its named shares; tenant segment closed by `/`
-  before any wildcard; no `+`; no `sys/`, `auth/`, `identity/`, `cubbyhole/`;
-  names in a tenant-qualified family.
-- Enforced in the template (a violating policy fails the render) **and** in the
-  render harness (`policyscope`, mutation-tested). Deterministic; nothing
-  advisory decides it.
+  inside the tenant's mount or its named shares, in the share's direction;
+  tenant segment closed by `/` before any wildcard; no `+`; no `sys/`, `auth/`,
+  `identity/`, `cubbyhole/`; one-line stanzas, no `sudo`; names in a
+  tenant-qualified family. **Every rendered role passes it too**: its own
+  policy only, its tenant's mount, its own ServiceAccount, its namespace by
+  name and tenant label; an SSO role, exactly its tenant's group.
+- Enforced in the template (a violating object fails the render), in the
+  render harness (`policyscope`, mutation-tested), **and at the API server**
+  by ValidatingAdmissionPolicies on the VCO CRs in `vault-config`, which hold
+  for any writer (ADR-0006). Deterministic; nothing advisory decides it.
 
 ## Consequences
 

@@ -17,7 +17,7 @@ flowchart TB
   VCO[vault-config-operator<br/>writes Vault configuration]
   V[Vault Community Edition<br/>one root namespace, enforces policies]
   ESO[External Secrets Operator<br/>Vault in, Kubernetes Secret out]
-  IDP[Identity provider<br/>groups tenant-tier]
+  IDP[Identity provider<br/>groups tenant-role]
   PT -->|Tenant| MTO
   MTO -->|Tenant, namespaces| EXT
   AT -->|ServiceAccount and Deployment annotations| EXT
@@ -39,7 +39,8 @@ flowchart LR
       CTI[Child TemplateInstances<br/>core and eso slice per tenant]
     end
     BOOT[[mto-extension-vault-community-bootstrap<br/>Helm, installed once]]
-    VCO[vault-config-operator<br/>login role vco-admin, name-bounded policy]
+    VCO[vault-config-operator<br/>login role vco-admin, policy bounded by name and type]
+    VAP{{admission policies<br/>kinds, origin, scope, cluster}}
     NS[Tenant namespaces<br/>vault-config-sa ConfigMaps, SecretStores,<br/>ExternalSecrets, Secrets]
     ESO[External Secrets Operator]
     REL[Reloader Enterprise]
@@ -48,8 +49,8 @@ flowchart LR
     KVA[(team-a/kv)]
     KVB[(team-b/kv)]
     KVS[(shared/kv)]
-    K8S[auth/kubernetes/workloads<br/>roles kv.tenant.ns.sa]
-    OIDC[auth/oidc/sso<br/>roles sso.tenant.tier]
+    K8S[auth/team-a/kubernetes/workloads<br/>roles kv.team-a.ns.sa and share.team-a.*]
+    OIDC[auth/team-a/oidc/sso<br/>roles sso.team-a.role]
     POL[policies kv.* share.* sso.*]
   end
   IDP[Identity provider]
@@ -59,6 +60,8 @@ flowchart LR
   PTI -->|SecretEngineMount| VCO
   CTI -->|Policy, roles| VCO
   CTI -->|ConfigMaps, ESO objects| NS
+  BOOT --> VAP
+  VAP -.->|checks every VCO CR| VCO
   VCO --> KVA & KVB & KVS & K8S & OIDC & POL
   ESO -->|login as workload| K8S
   ESO -->|read| KVA
@@ -73,14 +76,15 @@ flowchart LR
 flowchart TB
   subgraph Chart[mto-extension-vault-community, rendered per tenant]
     IN[/Inputs: tenant, namespaces by selector,<br/>annotated ServiceAccounts and Deployments/]
-    SCOPE[_helpers.tpl<br/>scope check: every path inside tenant/kv<br/>or its named shares; name families]
-    SA[04-sa-own-tenant<br/>Policy + KubernetesAuthEngineRole per SA]
-    SH[04-sa-share-in / -out<br/>share policies and roles on shared/kv]
-    SSO[06-oidc / 07-sso-policies<br/>roles and policies per tier]
+    SCOPE[_helpers.tpl<br/>scope check: every path inside tenant/kv<br/>or its named shares; role bindings; name families]
+    AUTH[01-tenant-scaffolding<br/>auth mount tenant/kubernetes/workloads + config]
+    SA[04-sa-own-tenant<br/>Policy + KubernetesAuthEngineRole per SA,<br/>bound by namespace name and tenant label]
+    SH[04-sa-share-in / -out<br/>share policies on shared/kv,<br/>roles on the tenant's own mount]
+    SSO[06-oidc / 07-sso-policies<br/>mount tenant/oidc/sso, roles and policies per role]
     CM[vault-config-sa, vault-apps<br/>VAULT_NAMESPACE empty]
     ES[05-externalsecrets<br/>slice eso]
   end
-  IN --> SCOPE --> SA & SH & SSO
+  IN --> SCOPE --> AUTH & SA & SH & SSO
   IN --> CM & ES
 ```
 
@@ -102,7 +106,8 @@ sequenceDiagram
   AT->>EXT: annotate ServiceAccount web, Deployment
   EXT->>EXT: scope check: every path under team-a/kv/
   EXT->>VCO: Policy and role kv.team-a.team-a-api.web
-  VCO->>V: policy, Kubernetes auth role
+  Note over EXT,VCO: admission policies check each VCO CR again
+  VCO->>V: policy, role on auth/team-a/kubernetes/workloads
   EXT->>ESO: SecretStore web-vault, ExternalSecret web-db-creds
   AT->>V: sign in (OIDC, sso.team-a.editor), write postgres
   ESO->>V: log in as web, read team-a/kv/data/dev/team-a-api/web/postgres
@@ -122,12 +127,12 @@ sequenceDiagram
   participant V as Vault Community
   participant VA as Vault admin
   PT->>EXT: delete Tenant team-a
-  EXT->>VCO: remove Policies, roles, share roles
-  VCO->>V: delete policies and roles: access revoked
+  EXT->>VCO: remove Policies, roles, share roles, auth mounts
+  VCO->>V: delete policies and roles, disable auth/team-a/…: access and tokens revoked
   EXT->>VCO: remove SecretEngineMount team-a/kv
   VCO--xV: disable mount: denied by VCO's policy
   Note over VCO,V: CR stays Terminating, secrets stay
-  VA->>V: later, deliberate: vault secrets disable team-a/kv
+  VA->>V: later, deliberate, once the CR is Terminating: vault secrets disable team-a/kv
   VA->>VCO: remove the CR's finalizer
 ```
 
@@ -143,5 +148,7 @@ flowchart LR
     R[team-a/kv/data/dev/team-a-api/web/*] --> C{scope check:<br/>under team-a/kv/,<br/>segment closed by /}
     C -->|passes| OK[Policy written by VCO]
     C -->|fails| X[render fails, nothing written]
+    H[a CR written by hand or by a<br/>tenant's Template] --> A{admission:<br/>kinds, origin and scope}
+    A -->|fails| X2[refused at the API server]
   end
 ```

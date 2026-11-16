@@ -1,4 +1,5 @@
-# Enforces docs/method.md on every pull request and on main.
+# Enforces docs/method.md on every pull request and on main: the docs checks
+# and every chart check (make verify), the version bump, the ADR and story rules.
 name: Verify
 
 on:
@@ -10,10 +11,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # The pinned helm and yq, not the runner image's: the Makefile downloads its
+    # pinned versions only when HELM / YQ_BIN point at a path that does not exist
+    # yet. The render harness is sensitive to the yq version.
+    env:
+      HELM: ${{ github.workspace }}/bin/helm
+      YQ_BIN: ${{ github.workspace }}/bin/yq
     steps:
+      # Full history: version-bump-check and adr-diff compare with the base.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -26,12 +38,37 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: make verify (lint, links, method, tests)
+      # crd-validate and admission-offline run the apiserver's admission code
+      # through Go helpers.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # No credential needed: the VCO CRDs are vendored in hack/vco-crds.
+      - name: make verify (docs, method, chart lint, render tests, CRD schema check, admission CEL)
         run: make verify
+
+      # Every guard weakened in turn; a check must fail for each. Slower than
+      # make verify (one render-test run per mutation), so its own step.
+      - name: Every guard mutation is killed
+        run: make mutation-test
+
+      # The release skips a version that is already published, so a changed
+      # chart without a bump would never be released. Caught here instead.
+      # github.base_ref through env:, never inside run: — an expression there
+      # is pasted into the script before the shell parses it.
+      - name: A changed chart bumps its version
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: make version-bump-check BASE="origin/$BASE_REF"
 
       - name: Accepted ADRs are immutable
         if: github.event_name == 'pull_request'
-        run: python3 hack/check_method.py adr-diff --base "origin/${{ github.base_ref }}"
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: python3 hack/check_method.py adr-diff --base "origin/$BASE_REF"
 
       - name: The PR cites its story
         if: github.event_name == 'pull_request'

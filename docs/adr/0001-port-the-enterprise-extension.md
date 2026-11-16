@@ -1,13 +1,13 @@
 # ADR-0001: Port the Enterprise extension
 
-- **Status:** Proposed
-- **Date:** 2026-10-03
+- **Status:** Accepted
+- **Date:** 2026-10-03; accepted 2026-11-03
 
 ## Context
 
 `mto-extension-vault-enterprise` is built and tested: two Helm charts rendering
 vault-config-operator (VCO) CRs through Template Operator v2, a workload
-annotation contract shared with the OpenBao extension, four tiers, SSO, sharing,
+annotation contract shared with the OpenBao extension, four roles, SSO, sharing,
 ESO delivery, a 39-check render harness and an e2e suite. Its isolation is a
 Vault namespace per tenant, which Community Edition doesn't have (N1); on
 Community its objects collide in root while reporting success (N2).
@@ -19,7 +19,7 @@ user experience stays identical.
 ## Decision
 
 - Build this extension as a **port** of the Enterprise charts: same chart
-  shape, same VCO kinds, same annotations, tiers, name families, ConfigMap
+  shape, same VCO kinds, same annotations, roles, name families, ConfigMap
   keys, `tenantValues` mechanism, harness and e2e rules. Change only what
   `design.md` §2 names.
 - **A separate repository for now**, with a render check (story C.5) that

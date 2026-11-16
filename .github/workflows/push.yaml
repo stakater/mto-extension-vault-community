@@ -1,0 +1,53 @@
+name: Push
+
+on:
+  push:
+    branches:
+      - main
+    # '*.md' ignores only root-level Markdown ('*' does not cross a '/'), so a
+    # change to charts/README.md still releases.
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+
+# Two pushes must not race each other to publish the same chart version.
+concurrency:
+  group: push-main
+  cancel-in-progress: false
+
+jobs:
+  push-charts:
+    name: Push Charts
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # The pinned helm and yq, not the runner image's: the Makefile downloads its
+    # pinned versions only when HELM / YQ_BIN point at a path that does not exist
+    # yet. The render harness is sensitive to the yq version.
+    env:
+      HELM: ${{ github.workspace }}/bin/helm
+      YQ_BIN: ${{ github.workspace }}/bin/yq
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lint, render tests, version pin, CRD schema check
+        run: make charts
+
+      # hack/release-chart.sh skips a version that is already published (helm
+      # push would overwrite it) and fails on anything it cannot interpret. The
+      # tenant chart is pushed before the bootstrap that pins it.
+      - name: Package and push charts
+        run: make helm-release
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}

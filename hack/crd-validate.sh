@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Validate every rendered VCO CR against vault-config-operator's CRDs, through
+# the apiserver's own admission pipeline (hack/crd-validate).
+#
+# Coverage is per render path: the tenant chart at component=all and at each
+# slice, for every fixture, plus the parent gotemplate's mounts. Each render
+# path must check exactly the number of CRs it emits today (-want), so a
+# render that silently drops or gains objects fails here (a bare minimum of 1
+# accepted a render that fell to one object). The eso slice emits none by
+# design. When a fixture or template changes the count on purpose, update the
+# table below.
+#
+# Usage: hack/crd-validate.sh <crd-dir>
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CRDS="${1:?usage: hack/crd-validate.sh <crd-dir>}"
+HELM="${HELM:-helm}"
+YQ="${YQ:-yq}"
+CHART="$REPO_ROOT/charts/mto-extension-vault-community"
+BOOTSTRAP="$REPO_ROOT/charts/mto-extension-vault-community-bootstrap"
+FIXTURES="$REPO_ROOT/hack/render-fixtures"
+
+[ -d "$CRDS" ] || { echo "error: CRD directory $CRDS does not exist" >&2; exit 1; }
+ls "$CRDS"/*.yaml > /dev/null 2>&1 || { echo "error: no CRD files in $CRDS" >&2; exit 1; }
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+fail=0
+
+validate() { # validate <label> <manifest> <expected-count>
+  local args=(-want "$3")
+  # Zero is a count too: the eso slice must still render no VCO CR.
+  [ "$3" = 0 ] && args=(-allow-empty -want 0)
+  printf '%-26s ' "$1"
+  if ! (cd "$REPO_ROOT" && go run ./hack/crd-validate "${args[@]}" "$CRDS" "$2"); then
+    fail=1
+  fi
+}
+
+expected() { # expected <fixture> <component> -> VCO CR count that render emits
+  [ "$2" = eso ] && { echo 0; return; }
+  case "$1" in
+    full) echo 24 ;; guards) echo 12 ;; no-optins) echo 2 ;; no-workloads) echo 12 ;;
+    *) echo "no expected count for fixture $1" >&2; exit 1 ;;
+  esac
+}
+
+for fx in full guards no-optins no-workloads; do
+  for c in all core eso; do
+    # Render on its own line: a failed render must not become an empty input.
+    if ! "$HELM" template mto-extension-vault-community "$CHART" -n vault-config \
+        -f "$FIXTURES/values-$fx.yaml" --set "component=$c" > "$WORK/r.yaml" 2>"$WORK/r.err"; then
+      echo "FAIL $fx/$c: render failed: $(head -1 "$WORK/r.err" | cut -c1-200)"; fail=1; continue
+    fi
+    validate "$fx/$c" "$WORK/r.yaml" "$(expected "$fx" "$c")"
+  done
+done
+
+# The parent gotemplate, rendered through helm's tpl with the parameters the
+# bootstrap chart stamps, so its mounts are validated too.
+"$HELM" template b "$BOOTSTRAP" -n vault-config > "$WORK/boot.yaml"
+mkdir -p "$WORK/shim/templates" "$WORK/shim/files"
+cp "$BOOTSTRAP/files/parent-gotemplate.tpl" "$WORK/shim/files/"
+printf 'apiVersion: v2\nname: shim\nversion: 0.0.1\n' > "$WORK/shim/Chart.yaml"
+printf '{{ tpl ($.Files.Get "files/parent-gotemplate.tpl") (dict "parameters" .Values.parameters) }}\n' > "$WORK/shim/templates/render.yaml"
+# The parent Template's own parameter defaults, as a values file, plus Tenants.
+"$YQ" e -N 'select(.kind == "Template" and .metadata.name == "mto-extension-vault-community-parent")
+         | {"parameters": (.spec.parameters | map(select(has("value"))) | map({"key": .name, "value": .value}) | from_entries)}' \
+  "$WORK/boot.yaml" > "$WORK/shim/values.yaml"
+"$YQ" e -i '.parameters.tenants = [{"metadata": {"name": "team-a"}}] | .parameters.tenantNamespaces = [{"metadata": {"name": "team-a-dev", "labels": {"stakater.com/tenant": "team-a"}}}]' "$WORK/shim/values.yaml"
+# shared-kv and team-a-kv
+if "$HELM" template shim "$WORK/shim" > "$WORK/parent.yaml" 2>"$WORK/p.err"; then
+  validate "parent" "$WORK/parent.yaml" 2
+else
+  echo "FAIL parent: render failed: $(head -1 "$WORK/p.err" | cut -c1-200)"; fail=1
+fi
+
+# Self-test: a misspelt metadata key, which pruning cannot see, is refused. The
+# same mount without the typo must validate, so the refusal is about the typo.
+"$YQ" ea '[select(.kind == "SecretEngineMount")] | .[0]' "$WORK/parent.yaml" > "$WORK/meta-ok.yaml"
+"$YQ" e '.metadata.annotaions = {"x": "y"}' "$WORK/meta-ok.yaml" > "$WORK/meta-typo.yaml"
+validate "self-test (clean mount)" "$WORK/meta-ok.yaml" 1
+printf '%-26s ' "self-test (metadata typo)"
+if (cd "$REPO_ROOT" && go run ./hack/crd-validate -want 1 "$CRDS" "$WORK/meta-typo.yaml") > "$WORK/self.out" 2>&1; then
+  echo "FAIL a misspelt metadata key validated"; fail=1
+elif grep -q 'unknown field "annotaions"' "$WORK/self.out"; then
+  echo "OK refused: unknown field \"annotaions\""
+else
+  echo "FAIL refused for another reason: $(head -3 "$WORK/self.out" | tr '\n' ' ')"; fail=1
+fi
+
+exit "$fail"

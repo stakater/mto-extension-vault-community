@@ -1,0 +1,90 @@
+# Parent Template (gotemplate). Watches MTO Tenant CRs cluster-wide through the
+# parent TI's objectFieldRef and renders:
+#   - the shared mount shared/kv for cross-tenant shares, once per Vault (the
+#     share roles live on each tenant's own auth mount, ADR-0007)
+#   - every Tenant's kv mount <tenant>/kv, for as long as the Tenant exists
+#   - one TemplateInstance per enabled child Template, per Tenant with a
+#     labelled namespace
+#   - a ConfigMap listing the Tenants it skipped, and why
+#
+# Vault Community has no namespaces, so there is no Namespace CR and no
+# spec.authentication.targetNamespace: every object lands in Vault's one
+# namespace, at a path that starts with the tenant's name.
+#
+# The gotemplate body lives in files/parent-gotemplate.tpl (sourced via
+# .Files.Get to keep the t-op-v2 action delimiters out of helm's engine).
+{{- /* What the parent renders itself: every tenant's kv mount and the shared
+       kv mount. Share roles live on each tenant's own auth mount (ADR-0007),
+       so there is no shared auth mount. */ -}}
+{{- $parentKinds := list
+      (dict "kind" "SecretEngineMount" "output" "engines") }}
+---
+apiVersion: templates.v2.stakater.com/v2alpha1
+kind: Template
+metadata:
+  name: mto-extension-vault-community-parent
+  namespace: {{ .Values.configNamespace }}
+spec:
+  targetNamespaces:
+    explicit:
+      allow:
+        literal:
+          - {{ .Values.configNamespace }}
+  {{- with include "mto-extension-vault-community-bootstrap.templateSync" . }}
+  {{- . | nindent 2 }}
+  {{- end }}
+  parameters:
+    - name: tenants
+    {{- /* All namespaces, so the gotemplate can count the ones carrying
+           tenantLabelKey. No `name`, so t-op-v2 LISTs the GVK; the read is
+           granted by the tenant-reader ClusterRole in 00-rbac.yaml. */}}
+    - name: tenantNamespaces
+    - name: configNamespace
+      value: {{ .Values.configNamespace | quote }}
+    - name: childTemplateName
+      value: mto-extension-vault-community
+    - name: tenantLabelKey
+      value: {{ .Values.parent.tenantLabelKey | quote }}
+    - name: sharedTenantName
+      value: {{ .Values.parent.sharedTenantName | quote }}
+    # Comma-separated tenant names the parent skips: the first segment of a
+    # path Vault or the platform already uses (the reservedNames helper).
+    - name: reservedNames
+      value: {{ include "mto-extension-vault-community-bootstrap.reservedNames" . | quote }}
+    - name: eso
+      value: {{ include "mto-extension-vault-community-bootstrap.esoMode" . | quote }}
+    # How the parent's VCO CRs log in. The child Templates stamp the same
+    # values into every tenant.
+    - name: vcoAuthPath
+      value: {{ trimAll "/" (toString .Values.vco.authPath) | quote }}
+    - name: vcoRole
+      value: {{ .Values.vco.role | quote }}
+    - name: vcoServiceAccount
+      value: {{ .Values.vco.serviceAccount | quote }}
+  # State of what this Template renders itself, plus every child TI it emits.
+  # engines holds one entry per tenant plus the shared one, so past ~49
+  # tenants the 50-entry cap drops entries (OutputsResolved says so).
+  # See the vcoOutputs helper for what the Succeeded and LastError fields can
+  # and cannot say.
+  outputs:
+    {{- include "mto-extension-vault-community-bootstrap.vcoOutputs" (dict "ns" .Values.configNamespace "kinds" $parentKinds) | nindent 4 }}
+    # tiRendered / tiNsAllowed / tiParamsValid separate failure classes a bare
+    # tiReady=False cannot: each needs a different fix.
+    - name: tenants
+      fromAll:
+        apiVersion: templates.v2.stakater.com/v2alpha1
+        kind: TemplateInstance
+        namespace: {{ .Values.configNamespace }}
+      keyTemplate: "{.metadata.name}"
+      fields:
+        - { name: tiApplied,           jsonPath: "{.status.conditions[?(@.type=='Applied')].status}" }
+        - { name: tiReady,             jsonPath: "{.status.conditions[?(@.type=='Ready')].status}" }
+        - { name: tiSynced,            jsonPath: "{.status.conditions[?(@.type=='Synced')].status}" }
+        - { name: tiRendered,          jsonPath: "{.status.conditions[?(@.type=='Rendered')].status}" }
+        - { name: tiNsAllowed,         jsonPath: "{.status.conditions[?(@.type=='TargetNamespaceAllowed')].status}" }
+        - { name: tiParamsValid,       jsonPath: "{.status.conditions[?(@.type=='ParametersValid')].status}" }
+        # [*] keeps this a list query: matchedNamespaces is absent until a
+        # namespaceSelector resolves.
+        - { name: tiMatchedNamespaces, jsonPath: "{.status.matchedNamespaces[*]}" }
+  gotemplate: |
+{{ .Files.Get "files/parent-gotemplate.tpl" | indent 4 }}

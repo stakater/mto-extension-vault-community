@@ -1,0 +1,7 @@
+# Dex for the lab: person -> Vault (auth/<tenant>/oidc/sso) -> Dex -> Keycloak
+# realm "mto". From Dex's public chart; its config is the Secret dex/dex-config,
+# which `make lab-dex` builds from Secrets with jq (never printed): one Keycloak
+# connector and one static client "vault". The chart only mounts it.
+configSecret:
+  create: false
+  name: dex-config

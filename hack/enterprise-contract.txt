@@ -1,0 +1,57 @@
+# The workload contract of the Enterprise tenant chart, from hack/contract.sh.
+# Source: stakater/mto-extension-vault-enterprise origin/main at 72f425c.
+# Regenerate with: make contract-sync ENTERPRISE_SRC=<checkout> ENTERPRISE_REF=<ref>
+annotation.deployment kv-import.<name>
+annotation.deployment kv-secret.<name>
+annotation.deployment kv-subscribe.<name>
+annotation.serviceaccount app
+annotation.serviceaccount kv
+annotation.serviceaccount kv-export-tenant
+annotation.serviceaccount kv-import-tenant
+annotation.serviceaccount kv-subscribe-ns
+annotation.serviceaccount role
+configmap.key VAULT_ADDR
+configmap.key VAULT_CACERT
+configmap.key VAULT_FROM_<NS>_PATH
+configmap.key VAULT_IN_<PEER>_NAMESPACE
+configmap.key VAULT_IN_<PEER>_PATH
+configmap.key VAULT_IN_<PEER>_ROLE
+configmap.key VAULT_K8S_MOUNT
+configmap.key VAULT_K8S_ROLE
+configmap.key VAULT_KV_APP
+configmap.key VAULT_KV_APP_META_PATH
+configmap.key VAULT_KV_APP_PATH
+configmap.key VAULT_KV_SHARED_OUT_PATH
+configmap.key VAULT_NAMESPACE
+configmap.key VAULT_OUT_<PEER>_NAMESPACE
+configmap.key VAULT_OUT_<PEER>_PATH
+configmap.key VAULT_OUT_<PEER>_ROLE
+object AuthEngineMount vault-config/<tenant>-kubernetes
+object AuthEngineMount vault-config/<tenant>-oidc
+object ConfigMap <ns>/vault-apps
+object ConfigMap <ns>/vault-ca-bundle
+object ConfigMap <ns>/vault-config-<sa>
+object ExternalSecret <ns>/<sa>-<name>
+object JWTOIDCAuthEngineConfig vault-config/<tenant>-oidc-config
+object JWTOIDCAuthEngineRole vault-config/sso.<tenant>.admin
+object JWTOIDCAuthEngineRole vault-config/sso.<tenant>.audit-read
+object JWTOIDCAuthEngineRole vault-config/sso.<tenant>.editor
+object JWTOIDCAuthEngineRole vault-config/sso.<tenant>.viewer
+object KubernetesAuthEngineConfig vault-config/<tenant>-kubernetes-config
+object KubernetesAuthEngineRole vault-config/kv.<tenant>.<ns>.<sa>
+object KubernetesAuthEngineRole vault-config/share.<tenant>.<ns>.<sa>.in.<peer>
+object KubernetesAuthEngineRole vault-config/share.<tenant>.<ns>.<sa>.out.<peer>
+object Policy vault-config/kv.<tenant>.<ns>.<sa>
+object Policy vault-config/share.<tenant>.<ns>.<sa>.in.<peer>
+object Policy vault-config/share.<tenant>.<ns>.<sa>.out.<peer>
+object Policy vault-config/sso.<tenant>.admin
+object Policy vault-config/sso.<tenant>.audit-read
+object Policy vault-config/sso.<tenant>.editor
+object Policy vault-config/sso.<tenant>.viewer
+object PrometheusRule monitoring/<extension>-<tenant>
+object SecretStore <ns>/<sa>-vault
+object SecretStore <ns>/<sa>.share-<peer>-vault
+role admin
+role audit-read
+role editor
+role viewer
